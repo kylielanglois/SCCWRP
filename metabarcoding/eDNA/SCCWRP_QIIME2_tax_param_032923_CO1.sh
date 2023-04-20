@@ -60,6 +60,6 @@ qiime feature-classifier classify-consensus-blast \
 --i-query 03292023_CO1/03292023_CO1_trim_dada2_rep_seq.qza \
 --i-reference-taxonomy bold_derep1_taxa.qza \
 --i-reference-reads bold_derep1_seqs.qza \
---output-dir taxonomy \
+--output-dir CO1_bold_depep1_blast_taxonomy_90 \
 --p-perc-identity 0.90 \
 --p-maxaccepts 1
