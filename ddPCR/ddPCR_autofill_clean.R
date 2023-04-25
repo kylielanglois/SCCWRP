@@ -24,6 +24,7 @@ drop.size<-drop.v1
 dat1$Extraction.vol.ul<-dat1$Extraction.Volume #make sure Extraction Volume column name is correct
 dat1$Filtration.vol.ml<-dat1$Filtration.Volume..mL. #make sure Filtration Volume column name is correct
 dat1$Template.uL<-5
+dat1$Reaction.vol.ul<-20 #change to your reaction volume
 dat1$Correction.Factor<-dat1$Correction.Factor #make sure extraction kit Correction Factor column name is correct
 dat1$dilution<-dat1$Sample.description.4
 
@@ -41,7 +42,7 @@ mtch<-c("sample.unique",
         "Accepted.Droplets", 
         "TotalConfidenceMin68", "TotalConfidenceMax68", 
         "PoissonConfidenceMin68", "PoissonConfidenceMax68",
-        "Filtration.vol.ml", "Extraction.vol.ul", "Template.uL", 
+        "Filtration.vol.ml", "Extraction.vol.ul", "Template.uL", "Reaction.vol.ul",
         "Correction.Factor", "dilution")
 
 dat3<-dat1[ ,match(mtch, colnames(dat1))]
@@ -68,9 +69,9 @@ dat1.m<-subset(dat1.m, dat1.m$Negatives>5) #all merged wells have > 5 negative d
 
 #convert to per microliter-------
 dat1.m$Conc.copies.µL.<-as.numeric(as.character(dat1.m$Conc.copies.µL.))
-dat1.m$Copies.ul<-((dat1.m$Conc.copies.µL.*20)/dat1.m$Template.uL)*dat1.m$dilution
-dat1.m$PoissConfMaxcopiesperµL<-((dat1.m$PoissonConfMax*20)/dat1.m$Template.uL)*dat1.m$dilution
-dat1.m$PoissConfMincopiesperµL<-((dat1.m$PoissonConfMin*20)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$Copies.ul<-((dat1.m$Conc.copies.µL.*Reaction.vol.ul)/dat1.m$Template.uL)*dat1.m$dilution 
+dat1.m$PoissConfMaxcopiesperµL<-((dat1.m$PoissonConfMax*Reaction.vol.ul)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$PoissConfMincopiesperµL<-((dat1.m$PoissonConfMin*Reaction.vol.ul)/dat1.m$Template.uL)*dat1.m$dilution
 
 #convert to different metrics--------
 dat1.m$LOQ.Conc.<--log(1-(3/dat1.m$Accepted.Droplets))/drop.size
@@ -103,6 +104,45 @@ dat1.m$PoissConfMinCopiesperLCorr<-dat1.m$PoissConfMinCopiesper100mlCorr*10
 
 #flag if under LOQ-----------
 dat1.m$underLOQ<-ifelse(dat1.m$Copies.ul<dat1.m$LOQ.ul, "under LOQ", "")
+
+#confidence68--------
+dat1.m$TotalConfidenceMin68perµL<-((dat1.m$TotalConfidenceMin68*Reaction.vol.ul)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$TotalConfidenceMax68perµL<-((dat1.m$TotalConfidenceMax68*Reaction.vol.ul)/dat1.m$Template.uL)*dat1.m$dilution
+
+dat1.m$TotalConfidenceMin68.Filter<-dat1.m$TotalConfidenceMin68perµL*dat1.m$Extraction.vol.ul
+dat1.m$TotalConfidenceMax68.Filter<-dat1.m$TotalConfidenceMax68perµL*dat1.m$Extraction.vol.ul
+dat1.m$TotalConfidenceMin68.100mL<-(dat1.m$TotalConfidenceMin68.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$TotalConfidenceMax68.100mL<-(dat1.m$TotalConfidenceMax68.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$TotalConfidenceMin68.100mLCorr<-dat1.m$TotalConfidenceMin68.100mL*dat1.m$Corr.Factor
+dat1.m$TotalConfidenceMax68.100mLCorr<-dat1.m$TotalConfidenceMax68.100mL*dat1.m$Corr.Factor
+dat1.m$TotalConfidenceMin68.perLCorr<-dat1.m$TotalConfidenceMin68.100mLCorr*10
+dat1.m$TotalConfidenceMax68.perLCorr<-dat1.m$TotalConfidenceMax68.100mLCorr*10
+
+dat1.m$PoissonConfidenceMax68perµL<-((dat1.m$PoissonConfidenceMax68*20)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$PoissonConfidenceMin68perµL<-((dat1.m$PoissonConfidenceMin68*20)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$PoissonConfidenceMax68.Filter<-dat1.m$PoissonConfidenceMax68perµL*dat1.m$Extraction.vol.ul
+dat1.m$PoissonConfidenceMin68.Filter<-dat1.m$PoissonConfidenceMin68perµL*dat1.m$Extraction.vol.ul
+dat1.m$PoissonConfidenceMax68.100mL<-(dat1.m$PoissonConfidenceMax68.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$PoissonConfidenceMin68.100mL<-(dat1.m$PoissonConfidenceMin68.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$PoissonConfidenceMax68.100mLCorr<-dat1.m$PoissonConfidenceMax68.100mL*dat1.m$Corr.Factor
+dat1.m$PoissonConfidenceMin68.100mLCorr<-dat1.m$PoissonConfidenceMin68.100mL*dat1.m$Corr.Factor
+dat1.m$PoissonConfidenceMax68.perLCorr<-dat1.m$PoissonConfidenceMax68.100mLCorr*10
+dat1.m$PoissonConfidenceMin68.perLCorr<-dat1.m$PoissonConfidenceMin68.100mLCorr*10
+
+#QC check for CI------------
+#95 Poisson check
+ifelse(grepl("FAIL", dat1.m$sample.unique), "fail QC", 
+       ifelse(dat1.m$Copiesper100mlCorr<dat1.m$PoissConfMaxCopiesper100mlCorr, "true", "FAIL"))
+ifelse(grepl("FAIL", dat1.m$sample.unique), "fail QC", 
+       ifelse(dat1.m$Positives==0, "zero pos.", 
+              ifelse(dat1.m$Copiesper100mlCorr>dat1.m$PoissConfMinCopiesper100mlCorr, "true", "FAIL")))
+
+#68 total check
+ifelse(grepl("FAIL", dat1.m$sample.unique), "fail QC", 
+       ifelse(dat1.m$Copiesper100mlCorr<dat1.m$TotalConfidenceMax68.100mLCorr, "true", "FAIL"))
+ifelse(grepl("FAIL", dat1.m$sample.unique), "fail QC", 
+       ifelse(dat1.m$Positives==0, "zero pos.", 
+              ifelse(dat1.m$Copiesper100mlCorr>dat1.m$TotalConfidenceMin68.100mLCorr, "true", "FAIL")))
 
 #export------------
 write.csv(dat1.m, row.names = F,
