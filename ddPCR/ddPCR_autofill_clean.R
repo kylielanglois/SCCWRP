@@ -9,6 +9,7 @@
 #packages---------
 library(ggplot2)
 library(ggpubr)
+library(stringr)
 
 #files---------
 dat<-read.csv(file.choose(),head=T)
@@ -18,7 +19,7 @@ dat1<-dat
 ##CHANGE DEPENDING ON QX MANAGER VERSION--------
 drop.v1<-0.00085 #version 1
 drop.v2<-0.000795 #version 2
-drop.size<-drop.v1
+drop.size<-ifelse(any(str_detect(names(dat1), "Ch6")), drop.v2, drop.v1)
 
 #change column names--------
 dat1$Extraction.vol.ul<-dat1$Extraction.Volume #make sure Extraction Volume column name is correct
