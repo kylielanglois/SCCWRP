@@ -1,0 +1,50 @@
+conda activate qiime2-2021.4
+
+ biom convert -i all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.txt -o all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.biom --table-type="OTU table" --to-hdf5
+ qiime tools import \
+ --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.biom \
+ --type 'FeatureTable[Frequency]' \
+ --input-format BIOMV210Format \
+ --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.qza
+
+qiime feature-table summarize \
+ --i-table all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.qza \           
+ --o-visualization all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.qzv \
+ --verbose
+
+qiime feature-table summarize \
+ --i-table all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_table.qza \           
+ --o-visualization all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_summary.qzv \
+--verbose
+
+qiime tools export \           
+ --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_summary.qzv \
+ --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_dada2_summary
+
+qiime tools import --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set.fasta --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set.qza --type 'FeatureData[Sequence]'
+
+qiime feature-table tabulate-seqs --i-data all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set.qza --o-visualization all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_viz.qzv
+
+qiime tools export --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_viz.qzv --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_viz_export
+
+qiime alignment mafft --i-sequences all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set.qza --p-n-threads 'auto' --o-alignment all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned.qza --verbose
+Strategy:
+ FFT-NS-2 (Fast but rough)
+ Progressive method (guide trees were built 2 times.)
+
+If unsure which option to use, try 'mafft --auto input  output'.
+For more information, see 'mafft --help', 'mafft --man' and the mafft page.
+
+The default gap scoring scheme has been changed in version 7.110 (2013 Oct).
+It tends to insert more gaps into gap-rich regions than previous versions.
+To disable this change, add the --leavegappyregion option.
+
+qiime phylogeny fasttree --i-alignment all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned.qza --p-n-threads 'auto' --o-tree all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned_fasttree.qza --verbose
+
+qiime feature-classifier classify-sklearn  --i-reads all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set.qza  --i-classifier silva-138-99-nb-classifier_extracted_classifier.qza --p-reads-per-batch 10000 --p-n-jobs 4 --o-classification all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_silva_tax.qza --verbose
+
+qiime tools export --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_silva_tax.qza --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_silva_tax
+
+qiime tools export --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned_fasttree.qza --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned_fasttree.nwk
+
+qiime tools export --input-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned.qza --output-path all_biofilm_16S_V4V5_030322_pairedend_demux_trimmed_rep_set_aligned.fasta
