@@ -18,3 +18,8 @@ run code after navigating to appropriate directory:
 chmod +x FASTQC_runfile.sh
 ./FASTQC_runfile.sh
 ```
+
+output: 
+![Screen Shot 2023-07-21 at 4 56 58 PM](https://github.com/kylielanglois/SCCWRP/assets/31413115/4080f4d3-b246-4a9f-97c7-79a7b7b7393c)
+* may not show final column if R code broke
+* data should be available in fastqc_multiqc_dada2_filteronly_results.csv
