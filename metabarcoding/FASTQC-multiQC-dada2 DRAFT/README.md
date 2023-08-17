@@ -1,15 +1,16 @@
 getting code read: 
 * save all code files in single directory
-* edit FASTQC_run.sh to your correct file paths (first block of bash variables)
+* edit FASTQC_runfile.sh to your correct file paths (first block of bash variables)
 * edit nothing else!
 
 pre-processing:
 
 ```
-conda create -n multiqc -c bioconda -c conda-forge fastqc multiqc
-conda activate multiqc
+conda create -n multiqc_env -c bioconda -c conda-forge fastqc multiqc cutadapt
+conda activate multiqc_env
 export LC_ALL-en_US.UTF-8
 export LANG=en_US.UTF-8
+conda list #ensure you have 'pandas' installed
 ```
 
 run code after navigating to appropriate directory: 
