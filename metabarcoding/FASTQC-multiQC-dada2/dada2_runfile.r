@@ -17,10 +17,11 @@ sample.names
 filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
 filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
 
-len_R1<-as.numeric(args[2])
-len_R2<-as.numeric(args[3])
-out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(len_R1, len_R2),
-                     maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
+Q_R1<-as.numeric(args[2])
+Q_R2<-as.numeric(args[3])
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, 
+                     minQ =c(Q_R1, Q_R2),
+                     maxEE=c(2,2), rm.phix=TRUE,
                      compress=TRUE, multithread=T, matchIDs=TRUE, verbose = T)
 
 #learn error rates---------
