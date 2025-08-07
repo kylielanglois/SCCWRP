@@ -25,7 +25,6 @@ out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
                      truncLen=c(len_R1, len_R2),
                      maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
                      compress=TRUE, multithread=T, matchIDs=TRUE, verbose = T)
-
 #out.export<-as.data.frame(out)
 #write.csv(out.export, file = file.path(path, "seqs_in_table.csv"))
 
@@ -60,14 +59,14 @@ seqtab.nochim<-as.data.frame(t(seqtab.nochim))
 
 #writing/appending out file--------
 next_csv <- function() {
-  f <- length(list.files(path, pattern = "merger_table_V1"))
+  f <- length(list.files(path, pattern = "merger_table_V2"))
   num <- as.numeric(f)+1
-  paste0("/merger_table_V1_", num, ".csv")
+  paste0("/merger_table_V2_", num, ".csv")
 }
 
-if (length(grep("merger_table_V1", list.files(path)))==0){
+if (length(grep("merger_table_V2", list.files(path)))==0){
   write.table(seqtab.nochim,
-              file = file.path(path, "merger_table_V1_1.csv"),
+              file = file.path(path, "merger_table_V2_1.csv"),
               row.names = F, append = F, sep = ",")
 } else {
   write.csv(seqtab.nochim, file = file.path(path, next_csv()))
@@ -89,17 +88,17 @@ out.df <- merge(out, dd.df, by="sample.names", all.x = T)
 out.df$perc.retain<-(out.df$no.chimera/out.df$reads.in)
 
 #writing/appending track file--------
-if (file.exists(file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"))){
+if (file.exists(file.path(path, "fastqc_multiqc_dada2_filteronly_results_V2.csv"))){
   write.table(out.df,
-              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"),
+              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results_V2.csv"),
               row.names = F, append = T, sep = ",")
 } else {
   write.table(out.df,
-              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"),
+              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results_V2.csv"),
               row.names = F, append = F, sep = ",")
 }
 
 #get average percent retained--------
-av <- round(mean((out.df$nonchim / out.df$reads.in)*100), 2)
+av <- round(mean((out.df$no.chimera / out.df$reads.in)*100), 2)
 av
-write.table(av, file=file.path(path, "average_quality.txt"), row.names=F)
+write.table(av, file=file.path(path, "average_quality_V2.txt"), row.names=F)

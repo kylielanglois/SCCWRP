@@ -6,15 +6,14 @@ args <- commandArgs(trailingOnly = TRUE)
 str(args)
 cat(args, sep = "\n")
 
-#path<-"/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay/BIO_eDNA_032425/trimmed_fastq/"
-path <- args[1]
-path
-
+library(dada2)
 #get sample names-----
 fnFs <- sort(list.files(path, pattern="R1_001_trimmed.fq.gz", full.names = TRUE))
 fnRs <- sort(list.files(path, pattern="R2_001_trimmed.fq.gz", full.names = TRUE))
+
 sample.names <- sapply(strsplit(basename(fnFs), "_R1"), `[`, 1)
 sample.names
+
 filtFs <- file.path(path, "filtered", paste0(sample.names, "_R1_filt.fastq.gz"))
 filtRs <- file.path(path, "filtered", paste0(sample.names, "_R2_filt.fastq.gz"))
 
@@ -25,7 +24,6 @@ out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs,
                      truncLen=c(len_R1, len_R2),
                      maxEE=c(2,2), truncQ=2, rm.phix=TRUE,
                      compress=TRUE, multithread=T, matchIDs=TRUE, verbose = T)
-
 #out.export<-as.data.frame(out)
 #write.csv(out.export, file = file.path(path, "seqs_in_table.csv"))
 
@@ -49,7 +47,7 @@ names(derepRs) <- sample.names.1
 dadaFs <- dada(derepFs, err=errF, multithread=TRUE, verbose=T)
 dadaRs <- dada(derepRs, err=errR, multithread=TRUE, verbose=T)
 
-#merge R1 and R2--------
+ #merge R1 and R2--------
 mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE)
 
 #get merger table--------
@@ -60,14 +58,14 @@ seqtab.nochim<-as.data.frame(t(seqtab.nochim))
 
 #writing/appending out file--------
 next_csv <- function() {
-  f <- length(list.files(path, pattern = "merger_table_V1"))
-  num <- as.numeric(f)+1
-  paste0("/merger_table_V1_", num, ".csv")
+  f <- list.files(path, pattern = "^merger_table_V2_\\d+\\.csv")
+  num <- max(as.numeric(gsub("^merger_table_V2_(\\d)\\.csv", "\\1", f)) + 1)
+  paste0("/merger_table_V2_", num, ".csv")
 }
 
-if (length(grep("merger_table_V1", list.files(path)))==0){
+if (length(grep("merger_table_V2", list.files(path)))==0){
   write.table(seqtab.nochim,
-              file = file.path(path, "merger_table_V1_1.csv"),
+              file = file.path(path, "merger_table_V3_1.csv"),
               row.names = F, append = F, sep = ",")
 } else {
   write.csv(seqtab.nochim, file = file.path(path, next_csv()))
@@ -89,17 +87,17 @@ out.df <- merge(out, dd.df, by="sample.names", all.x = T)
 out.df$perc.retain<-(out.df$no.chimera/out.df$reads.in)
 
 #writing/appending track file--------
-if (file.exists(file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"))){
+if (file.exists(file.path(path, "fastqc_multiqc_dada2_filteronly_results_V3.csv"))){
   write.table(out.df,
-              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"),
+              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results_V3.csv"),
               row.names = F, append = T, sep = ",")
 } else {
   write.table(out.df,
-              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results.csv"),
+              file = file.path(path, "fastqc_multiqc_dada2_filteronly_results_V3.csv"),
               row.names = F, append = F, sep = ",")
 }
 
 #get average percent retained--------
-av <- round(mean((out.df$nonchim / out.df$reads.in)*100), 2)
+av <- round(mean((out.df$no.chimera / out.df$reads.in)*100), 2)
 av
-write.table(av, file=file.path(path, "average_quality.txt"), row.names=F)
+write.table(av, file=file.path(path, "average_quality_V3.txt"), row.names=F)
