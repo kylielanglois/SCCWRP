@@ -1,0 +1,490 @@
+---
+title: "eDNA_field_seq_viz_edit"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = T, echo=F}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+#not include "echo" or "eval" --> do individually to chunks
+```
+
+```{r install, echo = T}
+library(knitr)
+library(readxl)
+#detach(package:plyr)
+library(plyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(VennDiagram)
+library(vegan)
+set.seed(100)
+```
+
+```{r file, echo = T, warning=FALSE}
+path <- "/Users/kylielanglois/OneDrive - SCCWRP/eDNA field/"
+#path to parent folder
+
+met <- read.csv(file.path(path, "BIO_eDNA_field_metadata.csv"))
+met$samp.unique<-paste0(met$Project,"_", met$Site, "_R", met$Replicate)
+#combined metadata
+met$Filter.stage<-as.character(met$Filter.stage)
+
+cry.bact<-read.csv(file.path(path, "BIO_eDNA_012925/eDNA_CTAB_16S_012925_merger_8_table_silva_tax.csv"))
+cry.bact<-cry.bact[, !grepl("Cat", colnames(cry.bact))]
+cry.fish<-read.csv(file.path(path, "BIO_eDNA_012925/eDNA_CTAB_12S_012925_merger_12_table_MareMage_bl95_tax.csv"))
+cry.fish<-cry.fish[, !grepl("Cat", colnames(cry.fish))]
+
+cat.bact<-read.csv(file.path(path, "BIO_eDNA_032425/BIO_eDNA_032425_16S_dada2_merger8_table_silva.csv"))
+cat.fish<-read.csv(file.path(path, "BIO_eDNA_032425/BIO_eDNA_032425_12S_dada2_merger10_table_MareMage.csv"))
+
+spot.bact<-cbind(cat.bact[, colnames(cat.bact)[lapply(cat.bact, is.numeric)!=T]], 
+                cat.bact[, grepl("MagExt", colnames(cat.bact))])
+cat.bact<-cat.bact[, !grepl("MagExt", colnames(cat.bact))]
+
+spot.fish<-cbind(cat.fish[, colnames(cat.fish)[lapply(cat.fish, is.numeric)!=T]], 
+                cat.fish[, grepl("MagExt", colnames(cat.fish))])
+cat.fish<-cat.fish[, !grepl("MagExt", colnames(cat.fish))]
+
+combo.12<-read.csv(file.path(path, "BIO_eDNA_field_12S_combo_merger_table.csv"))
+combo.16<-read.csv(file.path(path, "BIO_eDNA_field_16S_combo_merger_table.csv"))
+
+```
+
+```{r file_edit, eval=T, echo=T}
+dat.temp<-cry.bact #choose which projects
+
+dat.temp$asv.sum<-rowSums(dat.temp[lapply(dat.temp, is.numeric)==T])
+dat.temp<-subset(dat.temp, dat.temp$asv.sum>0)
+
+num.col<-colnames(dat.temp)[lapply(dat.temp, is.numeric)==T] 
+#get only numeric columns
+sampsums<-colSums(dat.temp[ , match (num.col, colnames(dat.temp))])
+#get sum of only numeric columns
+#sum(sampsums)
+
+```
+
+```{r nmds, eval=T, echo=T}
+dat.n<-dat.temp[, !grepl("tax|sum", colnames(dat.temp), ignore.case = T)]
+#choose dat.temp or combined data table
+
+rownames(dat.n)<-dat.n[, 1]
+dat.n<-dat.n[,-1]
+dat.n.t<-as.data.frame(t(dat.n))
+sampsums.df<-data.frame(samps=colnames(dat.n), 
+                        sum=colSums(dat.n))
+
+meta<-metaMDS(dat.n.t, try = 100)
+
+coords<-as.data.frame(meta$points)
+coords$samps<-rownames(coords)
+coords<-merge(coords, met, by.x="samps", by.y="Sample.Name", all.x = T)
+coords<-merge(sampsums.df, coords, by="samps", all.y = T)
+coords$Filter.stage<-as.character(coords$Filter.stage)
+coords$Sequencing.Run<-as.character(coords$Sequencing.Run)
+
+```
+
+```{r nmds_viz, eval=T, echo=T}
+gc<-
+  ggplot(coords)+
+  geom_point(aes(x=MDS1, y=MDS2, 
+                 color=Filter.stage, shape=Project, 
+                 size=sum), 
+             stroke=1, alpha=0.75)+
+  scale_size_continuous(range=c(0,10))+
+  scale_shape_manual(values=c(16, 8, 6))+ #for projects
+#  scale_shape_manual(values=c(16, 13, 1))+ #for depths
+  ggtitle("eDNA field summer 2024 12S (MiFish-Umod)")
+#  ggtitle("eDNA field summer 2024 16S (EMP)")
+gc
+
+#ggsave(plot = gc,
+#       filename = "BIO_eDNA_field_12S_combo_NMDS_sizeseq.png", 
+#       path = path, height = 6, width = 8)
+```
+
+```{r dist, eval=T, echo=T}
+
+dist.df <- as.matrix(dist(dat.n.t, diag = F, upper = T))
+dist.df.m <- melt(dist.df, varnames=c("samp1", "samp2"))
+dist.df.m$match <- dist.df.m$samp1==dist.df.m$samp2
+dist.df.m<-dist.df.m[grepl("FALSE", dist.df.m$match), ]
+
+dist.df.m.m<-merge(dist.df.m, met, by.x="samp1", by.y="Sample.Name", 
+                   all.x=T)
+dist.df.m.m<-merge(dist.df.m.m, met, by.x="samp2", by.y="Sample.Name", 
+                   all.x=T)
+
+```
+
+```{r dist_plot, eval=T, echo=T}
+
+bg<-ggplot(data=dist.df.m.m, 
+               aes(x=Filter.stage.x, y=value, col=Filter.stage.y))+
+  geom_boxplot(aes(group=Filter.stage.y))+
+  facet_grid(~(Filter.stage.x), scales = "free_x")+
+  labs(x="Filter Stage", y="Bray-Curtis distance", 
+       color="Filter Stage\ncompare", 
+       title = "")
+bg
+
+#ggsave(plot = bg,
+#       filename = "BIO_eDNA_field_CRY_16S_bray_box.png", 
+#       path = path, 
+#       height = 4, width = 8)
+```
+
+```{r make_prop, eval=T, echo=T}
+samp.count <- met %>% 
+  group_by(Project, Assay) %>%  
+  summarise(total.samps=length(Sample.Name))
+
+dat1.perc<-sweep(dat.temp[ , match(num.col, colnames(dat.temp))], 
+                                   2, sampsums, `/`)
+#make proportional for only numeric columns
+dat1.perc$ASV<-dat.temp$Feature.ID
+#add ASV column back
+colSums(dat1.perc[ , match (num.col, colnames(dat1.perc))]) 
+#check all are 1
+
+dat1.perc.m<-melt(dat1.perc)
+dat1.perc.m$num<-1:nrow(dat1.perc.m)
+dat1.perc.m<-merge(dat1.perc.m, dat.temp[ , -match(num.col, 
+                                                   colnames(dat.temp))], 
+                 by.x = "ASV", by.y="Feature.ID")
+#merge with taxonomy info, remove duplicate "num" rows if needed
+```
+
+```{r make_prop_2, eval=T, echo=T}
+
+dat1.tax<-ddply(dat.temp, "Taxon6", numcolwise(sum))
+dat1.tax.sums<-colSums(dat1.tax[2:(ncol(dat1.tax)-1)])
+dat1.tax.perc<-sweep(dat1.tax[, 2:(ncol(dat1.tax)-1)], 
+                                   2, dat1.tax.sums, `/`)
+#make proportional for only numeric columns
+dat1.tax.perc$tax<-dat1.tax$Taxon6
+#add ASV column back
+colSums(dat1.tax.perc[, 2:(ncol(dat1.tax.perc)-1)]) 
+#check all are 1
+
+dat1.perc.tax.m<-melt(dat1.tax.perc)
+dat1.perc.tax.m$num<-1:nrow(dat1.perc.tax.m)
+
+dat1.perc.tax.m<-merge(dat1.perc.tax.m, met, 
+                 by.x = "variable", by.y="Sample.Name")
+
+```
+
+```{r tax_consol, eval=T, echo=T}
+tax.col<-"Taxon6" 
+#Taxon8 for fish genus
+#Taxon6 for bact genus
+
+dat.temp$tax.consol<-ifelse(is.na(dat.temp$Taxon6), dat.temp$last_tax, 
+                            dat.temp$Taxon6) 
+#if no ID at desired tax, make it last known taxonomy ID
+dat.temp.tax<-dat.temp[, match(c("tax.consol", num.col), colnames(dat.temp))]
+dat.temp.tax<-dat.temp.tax[!grepl("asv", colnames(dat.temp.tax))]
+
+dat.temp.tax.consol<-ddply(dat.temp.tax, "tax.consol", numcolwise(sum))
+
+```
+
+```{r compare_venn, eval=T, echo=T}
+#dat.v <- dat.temp #if comparing ASV
+dat.v <- dat.temp.tax.consol #if comparing higher tax
+
+stage.1<-dat.v[, grepl("Top|tax", colnames(dat.v))] 
+#use "Feature" for ASV, use "tax" for genus
+stage.1<-stage.1[, !grepl("Top4", colnames(stage.1))]
+#pick ID for 1st stage, remove any not relevant samples
+#CRY: "Top", remove "Top4"
+#CAT: "Dupo1", remove "\\.W"
+#SPOT: "_1", remove "_S|DCM|BW" as needed
+stage.1$sums<-rowSums(stage.1[2:ncol(stage.1)])
+stage.1<-subset(stage.1, stage.1$sums>0)
+stage.1.tax<-unique(stage.1[, 1])
+
+stage.2<-dat.v[, grepl("CTAB|Feature", colnames(dat.v))]
+#use "Feature" for ASV, use "tax" for genus
+stage.2<-stage.2[, !grepl("CRY4", colnames(stage.2))]
+
+#pick ID for 2nd stage, remove any not relevant samples
+#CRY: "CTAB", remove "CRY4"
+#CAT: "Dupo2", remove "\\.W"
+#SPOT: "_2nd", remove "_S|DCM|BW" as needed
+stage.2$sums<-rowSums(stage.2[2:ncol(stage.2)])
+stage.2<-subset(stage.2, stage.2$sums>0)
+stage.2.tax<-unique(stage.2[, 1])
+
+paste("unique for 1st stage: ", length(stage.1.tax)-sum(stage.1.tax %in% stage.2.tax))
+paste("unique for 2nd stage: ", length(stage.2.tax)-sum(stage.2.tax %in% stage.1.tax))
+paste("shared: ", sum(stage.1.tax %in% stage.2.tax))
+```
+
+```{r compare_venn_1, eval=F, echo=F}
+dat.v <- dat.temp #if comparing ASV
+#dat.v <- dat.temp.tax.consol #if comparing higher tax
+
+ven1<-dat.v[, grepl("CRY4|tax", colnames(dat.v))] 
+ven1$sums<-rowSums(ven1[2:ncol(ven1)])
+ven1<-subset(ven1, ven1$sums>0)
+ven1.tax<-unique(ven1[, 1])
+
+ven2<-dat.v[, grepl("CTAB|tax", colnames(dat.v))]
+ven2<-ven2[, !grepl("CRY4", colnames(ven2))]
+ven2$sums<-rowSums(ven2[2:ncol(ven2)])
+ven2<-subset(ven2, ven2$sums>0)
+ven2.tax<-unique(ven2[, 1])
+
+paste("unique for venn 1: ", length(ven1.tax)-sum(ven1.tax %in% ven2.tax))
+paste("unique for venn 2: ", length(ven2.tax)-sum(ven2.tax %in% ven1.tax))
+paste("shared: ", sum(ven1.tax %in% ven2.tax))
+
+```
+
+```{r compare_venn_2, eval=F, echo=F}
+#ust do "compare_venn" first
+#for CAT "whole" comoparison only
+
+stage.w<-dat.v[, grepl("\\.W|Feature", colnames(dat.v))]
+#use "Feature" for ASV, use "tax" for genus
+
+stage.w$sums<-rowSums(stage.w[2:ncol(stage.w)])
+stage.w<-subset(stage.w, stage.w$sums>0)
+stage.w.tax<-unique(stage.w[, 1])
+
+unique.1<-stage.1.tax[!(stage.1.tax %in% stage.w.tax)]
+unique.1<-unique.1[!(unique.1 %in% stage.2.tax)]
+unique.2<-stage.2.tax[!(stage.2.tax %in% stage.w.tax)]
+unique.2<-unique.2[!(unique.2 %in% stage.1.tax)]
+unique.w<-stage.w.tax[!(stage.w.tax %in% stage.1.tax)]
+unique.w<-unique.w[!(unique.w %in% stage.2.tax)]
+stage.1.2.tax <- stage.2.tax[stage.2.tax %in% stage.1.tax]
+
+
+paste("unique for 1st stage: ", length(unique.1))
+paste("unique for 2nd stage: ", length(unique.2))
+paste("unique for whole: ", length(unique.w))
+paste("shared 1-2: ", sum(stage.1.tax %in% stage.2.tax))
+paste("shared 1-w: ", sum(stage.1.tax %in% stage.w.tax))
+paste("shared 2-w: ", sum(stage.2.tax %in% stage.w.tax))
+paste("shared all: ", sum(stage.1.2.tax %in% stage.w.tax))
+
+```
+
+#### taxonomy
+
+```{r consolidate, echo=T, eval=T}
+
+#dat.temp.tax.consol : genus consolidated, counts
+#dat1.tax.perc : genus consolidated, relative abundance
+
+dat1.g <- dat1.tax.perc
+num.col.g <- colnames(dat1.g)[lapply(dat1.g, is.numeric)==T] 
+
+dat1.g$sum<-rowSums(dat1.g[,match(num.col.g, colnames(dat1.g))]) 
+#sequence totals per genus
+dat1.g<-dat1.g[order(-dat1.g$sum), ]
+
+colSums(dat1.g[,match(num.col.g, colnames(dat1.g))]) #confirm 1
+mean(colSums(dat1.g[1:25 ,match(num.col.g, colnames(dat1.g))])) 
+#choose at least 0.75
+```
+
+
+```{r tax_1, echo=T, cache=T, eval=T}
+#using top 20 genera of whole data set ---
+dat.choose.tax<-dat1.g[1:25, ]
+#choose which table for plotting
+#dat.temp.tax.consol : genus consolidated, counts
+#dat1.tax.perc : genus consolidated, relative abundance
+dat.choose.tax$tax[is.na(dat.choose.tax$tax)]<-"Unassigned"
+dat.choose.tax<-dat.choose.tax[, !grepl("sum", colnames(dat.choose.tax))]
+
+dat1.m<-melt(dat.choose.tax)
+dat1.m.met<-merge(dat1.m, met, 
+                  by.x = "variable", by.y="Sample.Name", 
+                  all.x=T, sort=F) #merge with metadata
+
+#get top 20 genera in each sample ---
+df.temp<-dat1.tax.perc[, match(c("tax", num.col.g), colnames(dat1.tax.perc))]
+df.new<-data.frame(tax=df.temp$tax)
+
+for (i in 2:10) {
+a<-as.data.frame(df.temp[, c(1, i)])
+a[, 2]<-as.numeric(as.character(a[, 2]))
+a<-as.data.frame(a[order(-a[2]), ])
+a<-a[1:10, ]
+df.new<-merge(df.new, a, by="tax", all=T)
+}
+
+#remove genera with ONLY na
+df.new[is.na(df.new)]<--1
+df.new$sum<-rowSums(df.new[2:10])
+df.new<-subset(df.new, df.new$sum>-9)
+df.new[df.new==-1]<-NA
+df.new<-df.new[, !grepl("sum", colnames(df.new))]
+df.new$tax[is.na(df.new$tax)]<-"Unassigned"
+mean(colSums(df.new[match(num.col.g, colnames(df.new))], na.rm = T))
+
+dat2.m<-melt(df.new)
+dat2.m.met<-merge(dat2.m, met, 
+                  by.x = "variable", by.y="Sample.Name", 
+                  all.x=T, sort=F) #merge with metadata
+
+### CHOOSE IF WANT TO INCLUDE NP OR NOT ###
+#dat2.m.met<-dat2.m.met[!grepl("Natronomonas", dat2.m.met$Genus), ]
+```
+
+
+```{r compare_bar_1, eval=F, echo=F}
+dat1.m.met<-dat1.m.met[!grepl("Cat", dat1.m.met$variable), ]
+dat1.m.met$plot.name<-paste("Rep", dat1.m.met$Replicate, "stage", dat1.m.met$Filter.stage)
+
+col.top<-c("#F0E868",  "#F8D0D0","#105010", "#A08018", "#781038",
+           "#68C030","#F07070",  "#685000", "#E85830","#48A010", 
+           "#F8F8A8",  "#F88058",  "#606060","#F83858","#3080C0", 
+           "#484880",  "#90D0F8",  "#B080D0", 
+          "#095c90", "#B04030",  "#F8F8A8", "#095c90",
+           "#C0C0C0","#F8A8A8","black", "#3080C0" )
+
+g<-ggplot(dat1.m.met)+
+  geom_bar(aes(x=plot.name, y=value, fill=tax), 
+           stat="identity", position = position_stack())+
+  facet_grid(~Replicate, scales = "free_x")+
+  scale_fill_manual(values=col.top, name="")+
+  labs(x="Sample", y="Relative sequence abundance (%)", 
+       title="CRYSTAL LAKE 16S CTAB experiment\ntop 25 genera, whole dataset")+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), 
+        legend.position = "bottom")
+g
+
+ggsave(plot = g, 
+       filename = "BIO_eDNA_field_CRY_16S_gen_bar1.png",
+       path = path,
+       height = 8, width = 10)
+
+```
+
+```{r compare_bar_2, eval=F, echo=F}
+dat2.m.met<-dat2.m.met[!grepl("Cat", dat2.m.met$variable), ]
+dat2.m.met$plot.name<-paste("Rep", dat2.m.met$Replicate, "stage", dat2.m.met$Filter.stage)
+
+col.top.2<-c("#F0E868","#48A8B8" ,  "#F8D0D0","#105010","#602858", "#A08018", "#781038",
+           "#68C030","#F07070",  "#685000", "#B8D8E0", "#E85830","#48A010", 
+           "#F8F8A8", "#A84888", "#F88058", "#98D880", "#606060","#F8E820", "#F83858","#3080C0", 
+           "#484880",  "#D0D018", "#90D0F8",  "#B080D0", 
+          "#095c90", "#B04030",  "#F8F8A8", "#095c90", "darkred",
+           "#C0C0C0","#405040", "#F8A8A8", "#B82840","orange", "#3080C0", "#F8F8F8" ,"black")
+
+g2<-ggplot(dat2.m.met)+
+  geom_bar(aes(x=plot.name, y=value, fill=tax), 
+           stat="identity", position = position_stack())+
+  facet_grid(~Replicate, scales = "free_x")+
+  scale_fill_manual(values=col.top.2, name="")+
+  labs(x="Sample", y="Relative sequence abundance (%)", 
+       title="CRYSTAL LAKE 16S CTAB experiment\ntop 10 genera, per sample")+
+  theme(axis.text.x = element_text(angle = 45, hjust=1), 
+        legend.position = "bottom")
+g2
+
+ggsave(plot = g2, 
+       filename = "BIO_eDNA_field_CRY_16S_gen_bar2.png",
+       path = path,
+       height = 8, width = 10)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r export_files, eval=F, echo=F}
+
+fish.list<-list(cat.fish, cry.fish, spot.fish)
+for (i in 1:length(fish.list)) {
+  df <- as.data.frame(fish.list[i])
+  num.col <- colnames(df)[lapply(df, is.numeric)==T] 
+  tax.col <- "Taxon8" 
+  df$tax.consol <- ifelse(is.na(df$Taxon8), df$last_tax, 
+                            df$Taxon8) 
+  #if no ID at desired tax, make it last known taxonomy ID
+  df1 <- df[, match(c("tax.consol", num.col), colnames(df))]
+  df1 <- df1[!grepl("asv", colnames(df1))]
+  df.consol <- ddply(df1, "tax.consol", numcolwise(sum))
+  assign(paste0("gen.", i), as.data.frame(df.consol))
+}
+
+bact.list<-list(cat.bact, cry.bact, spot.bact)
+for (i in 1:length(bact.list)) {
+  df <- as.data.frame(bact.list[i])
+  num.col <- colnames(df)[lapply(df, is.numeric)==T] 
+  tax.col <- "Taxon6" 
+  df$tax.consol <- ifelse(is.na(df$Taxon6), df$last_tax, 
+                            df$Taxon6) 
+  #if no ID at desired tax, make it last known taxonomy ID
+  df1 <- df[, match(c("tax.consol", num.col), colnames(df))]
+  df1 <- df1[!grepl("asv", colnames(df1))]
+  df.consol <- ddply(df1, "tax.consol", numcolwise(sum))
+  assign(paste0("gen.", i+3), as.data.frame(df.consol))
+}
+
+write.csv(gen.1, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CAT_12S_gen.csv"))
+write.csv(gen.2, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CRY_12S_gen.csv"))
+write.csv(gen.3, row.names = F, 
+          file.path(path, "BIO_eDNA_field_SPOT_12S_gen.csv"))
+write.csv(gen.4, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CAT_16S_gen.csv"))
+write.csv(gen.5, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CRY_16S_gen.csv"))
+write.csv(gen.6, row.names = F, 
+          file.path(path, "BIO_eDNA_field_SPOT_16S_gen.csv"))
+
+
+write.csv(cat.fish, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CAT_12S_ASV.csv"))
+write.csv(cry.fish, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CRY_12S_ASV.csv"))
+write.csv(spot.fish, row.names = F, 
+          file.path(path, "BIO_eDNA_field_SPOT_12S_ASV.csv"))
+write.csv(cat.bact, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CAT_16S_ASV.csv"))
+write.csv(cry.bact, row.names = F, 
+          file.path(path, "BIO_eDNA_field_CRY_16S_ASV.csv"))
+write.csv(spot.bact, row.names = F, 
+          file.path(path, "BIO_eDNA_field_SPOT_16S_ASV.csv"))
+
+
+
+
+```

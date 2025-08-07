@@ -1,0 +1,60 @@
+---
+title: "green_turtle_ddPCR_data_viz"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include = T, echo=F}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+#not include "echo" or "eval" --> do individually to chunks
+```
+
+
+```{r install, echo = F, eval=T}
+library(knitr)
+library(readxl)
+#detach(package:plyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(stringr)
+set.seed(100)
+```
+
+#### upload files
+
+```{r file, echo = T, eval=T}
+path<-"/Users/kylielanglois/OneDrive - SCCWRP/eDNA green sea turtle"
+
+d1<-read.csv(file.path(path, "2025-06-11 Cmyd_processed.csv"))
+d2<-read.csv(file.path(path, "2025-07-10 Cmyd_processed.csv"))
+
+dat1<-rbind(d1, d2)
+dat2<-dat1[!grepl("NTC|POS|EB", dat1$SCCWRP_ID), ]
+
+```
+
+### visualize
+
+```{r plot, echo=T, eval=T}
+dat2$plot.name<-paste(dat2$StationCode_2, dat2$Replicate.)
+
+gg<-ggplot(dat2)+
+  geom_bar(aes(x=plot.name, y=Copies.100mL, fill=ddPCR.date), 
+           stat = "identity", position = position_dodge())+
+  scale_fill_discrete(labels=c("2 (standard)", "4"), name="# ddPCR wells")+
+  labs(x="Station Code + Replicate", y="Copies per 100ml",
+       title = "Green sea turtle (Cmyd, Farrel-mod) ddPCR compare")
+gg
+
+ggsave(plot = gg, 
+       filename = "Cmyd_well_compare_071125.png",
+       path = path,
+       width = 6, height = 4)
+
+```
+
+
+

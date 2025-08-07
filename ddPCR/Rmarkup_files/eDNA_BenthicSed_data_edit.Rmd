@@ -1,0 +1,328 @@
+---
+title: "eDNA_BenthicSed_data_edit"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include = T, echo=F}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+#not include "echo" or "eval" --> do individually to chunks
+```
+
+
+## Code to be used for Benthic Sediment eDNA sequencing data
+
+### set up
+install packages
+
+```{r install, echo = T, cache=F}
+library(knitr)
+library(seqinr)
+library(plyr)
+library(reshape2)
+library(ggplot2)
+library(stringr)
+library(tidyr)
+library(vegan)
+library(ggplot2)
+library(palettetown)
+library(indicspecies)
+
+set.seed(100)
+```
+
+upload files
+
+```{r file, echo = T}
+path<-"/Users/kylielanglois/OneDrive - SCCWRP/eDNA benthic sediment/"
+tab<-read.csv(file.path(
+  path, "BenthicSed_CO1_042924_merger_90_dada2NB_CO1_noAnimal_tax_ASV.csv"))
+fun<-read.csv(file.path(
+  path, "BenthicSed_CO1_042924_merger_90_dada2NB_CO1_noAnimal_tax_gen_descrip.csv"
+))
+met<-read.csv(file.path(
+  path, "CSD_BRI_env.csv"))
+ext<-read.csv(file.path(
+  path, "BenthicSed_Extraction_Sheet.csv"))
+```
+
+```{r file_edit, echo=F}
+#change sequences to ASV#
+tab1<-tab
+tab1$ASV.names<-paste0("ASV", 1:nrow(tab1))
+ASV.names.df<-as.data.frame(rbind(tab1$ASV, tab1$ASV.names))
+tab1$ASV<-tab1$ASV.names
+tab1<-tab1[, -match("ASV.names", colnames(tab1))]
+
+#get just microbes
+fun1<-fun
+if (colnames(fun1)[1]=="Class"){
+  fun1<-subset(fun1, fun1$keep=="x")
+  fun1<-fun1[, 1:2]  
+} else {
+  print("genus-level :)")
+}
+
+tab.allNoAn<-tab    #all no animal ASV
+tab.Micr<-tab[tab$taxon.7 %in% fun1$Genus, ] #only keep microbes
+
+met1<-met
+ext1<-ext[ext$DNA.Barcoding.StationID!="", ]
+met2<-merge(ext1, met1, by="DNA.Barcoding.StationID", all.x=T)
+rownames(met2)<-met2$Sequencing.name
+
+met2.cl<-as.data.frame(t(as.data.frame(lapply(met2, class))))
+met2.cols.num<-paste(rownames(met2.cl)[met2.cl$V1!="character"], collapse="|")
+#only numeric columns
+met3<-met2[, grepl(met2.cols.num, colnames(met2))]
+```
+
+look at just microbial groups
+
+```{r taxonomy, echo=F, eval=T}
+tab.Micr.1<-merge(fun1, tab.Micr, by.x = "Genus", by.y = "taxon.7", all.y = T) #combine function with taxa
+tab.Micr.1<-cbind(tab.Micr.1$General.description, 
+      sweep(tab.Micr.1[,11:ncol(tab.Micr.1)], 2, 
+            colSums(tab1[, 10:ncol(tab1)]), `/`)*100) #make proportional
+colnames(tab.Micr.1)[1]<-"General.description" #make sure rename column with what you used to consolidate
+
+tab.Micr.1.m<-melt(tab.Micr.1)
+tab.Micr.1.m$variable<-gsub("X", "", tab.Micr.1.m$variable)
+tab.Micr.1.m<-tab.Micr.1.m[!grepl("EB", tab.Micr.1.m$variable), ]
+tab.Micr.1.m$transect<-sub("\\..*", "", tab.Micr.1.m$variable) #get station name, no subsample 
+tab.Micr.1.m$transect.fun<-paste(tab.Micr.1.m$transect, tab.Micr.1.m$General.description, sep = "_") 
+#make unique station+function
+tab.Micr.1.m<-subset(tab.Micr.1.m, tab.Micr.1.m$value>0) #remove all 0 values
+
+tab.Micr.2.m<-ddply(tab.Micr.1.m, "transect.fun", numcolwise(mean)) 
+#consolidate by function at each transect
+tab.Micr.2.m$variable<-sub("\\_.*", "", tab.Micr.2.m$transect.fun)
+tab.Micr.2.m$General.description<-sub(".*\\_", "", tab.Micr.2.m$transect.fun)
+tab.Micr.2.m$num<-1:nrow(tab.Micr.2.m)
+tab.Micr.2.m<-merge(tab.Micr.2.m, met2[, match(c("DNA.Barcoding.StationID", "Depth_bin", "Depth_m"), colnames(met2))],
+                        by.x ="variable", by.y = "DNA.Barcoding.StationID", all.x = T)
+tab.Micr.2.m<-tab.Micr.2.m[!duplicated(tab.Micr.2.m$num), ]
+tab.Micr.2.m$transect.type<-substr(tab.Micr.2.m$variable, 1, 1)
+tab.Micr.2.m<-tab.Micr.2.m[order(tab.Micr.2.m$Depth_m), ]
+tab.Micr.2.m$variable<-factor(tab.Micr.2.m$variable, levels=unique(tab.Micr.2.m$variable))
+
+
+col.sed<-c("#C0C0C0", "#F8C068", "#583828", "#B8F870", "#58B088", "#B070B0", 
+           "darkgreen", "#505070", "#98C8C0", "#404058", "#F89040", "#902010",  "#787898", 
+           "#207890", "#D05828")
+tg<-ggplot(tab.Micr.2.m)+
+  geom_bar(aes(x=variable, y=value, fill=General.description), 
+           stat = "identity", position = position_stack())+
+  scale_fill_manual(values=col.sed)+
+  facet_grid(~Depth_bin, scales = "free_x", space = "free_x")+ #Depth_bin; transect.type
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,  size = 6))+
+  labs(x="Station, arranged by increasing depth", y="Proportion of sequences per station (%)", fill="", 
+       title = "Benthic Sediment eDNA CO1 4/29/24 NB tax, microbes only\naverage sequences per station")
+tg
+ggsave(plot = tg, 
+       filename = "BenthicSed_CO1_042924_merger_90_dada2NB_CO1_noAnimal_transectmean_bydepth.png", 
+       path = path, 
+       height = 6, width=12)
+```
+
+
+transpose: taxa = columns, samples = rows
+```{r file_edit2, echo=F}
+d1<-tab1[, c(1, 10:ncol(tab1))]                 #ASV table-all
+rownames(d1)<-d1[, 1]     #make first column into row names
+d1<-d1[,-1]               #remove first column
+d1<-as.data.frame(t(d1))  #samples must be rows!!!!
+d1<-d1[!grepl("EB", rownames(d1)), ] #remove extraction blanks
+
+ASV.names.df<-as.data.frame(t(ASV.names.df))
+d2<-merge(ASV.names.df, tab.Micr, by.x="V1", by.y="ASV", all.y = T)
+d2<-d2[, c(2, 11:ncol(d2))]                 #ASV table-microbes only
+rownames(d2)<-d2[, 1]     #make first column into row names
+d2<-d2[,-1]               #remove first column
+d2<-as.data.frame(t(d2))  #samples must be rows!!!!
+d2<-d2[!grepl("EB", rownames(d2)), ] #remove extraction blanks
+
+met3<-met3[rownames(met3) %in% rownames(d1), ]    #match to data, works for both
+```
+
+```{r nmds, echo=T, cache=T}
+n1<-metaMDS(d1, trymax = 100, trace=F)
+n2<-metaMDS(d2, trymax = 100, trace = F)
+
+en1<-envfit(ord=n1, env=met3, na.rm=T)
+en2<-envfit(ord=n2, env=met3, na.rm=T)
+
+env1.arrows1<-cbind(
+  as.data.frame(en1$vectors$arrows), #arrow coordinates
+  data.frame(r=en1$vectors$r, 
+             p=en1$vectors$pvals, 
+             env=rownames(en1$vectors$arrows)))
+env1.arrows2<-subset(env1.arrows1, env1.arrows1$p<0.05) #only significant arrows
+env2.arrows1<-cbind(
+  as.data.frame(en1$vectors$arrows), #arrow coordinates
+  data.frame(r=en1$vectors$r, 
+             p=en1$vectors$pvals, 
+             env=rownames(en1$vectors$arrows)))
+env2.arrows2<-subset(env2.arrows1, env2.arrows1$p<0.05) #only significant arrows
+
+```
+
+```{r nmds_plot1, echo=F, eval=T}
+coords1<-as.data.frame(n1$points)
+coords1.2<-coords1
+coords1.2$samp<-rownames(coords1.2)
+coords1.3<-merge(coords1.2, met2, by.x="samp", 
+               by.y = "Sequencing.name", 
+               all.x = T, sort = F) #merge coords with metdata for plotting
+
+col.d<-c( "#a6bddb", "#3690c0", "#02818a", "#014636")
+pg1<-ggplot()+
+  geom_segment(data=env1.arrows2, 
+               aes(xend = NMDS1/1.25, yend = NMDS2/1.25, x=0, y=0), 
+               arrow = arrow(type = "closed", length=unit(0.1,"cm")), 
+               alpha=0.5, color="#333333")+
+  geom_text_repel(data=env1.arrows2, 
+               aes(x = NMDS1/1.25, y = NMDS2/1.25, label=env), 
+               size=2, max.overlaps = 20)+
+  geom_point(data=coords1.3, 
+             aes(x=MDS1, y=MDS2, 
+                 col=Depth_bin, shape=StationType), 
+             size=4, alpha=0.75, stroke=1)+
+  scale_shape_manual(values=c(1, 17, 18, 19))+
+  scale_color_manual(values=col.d)+
+  labs(x="NMDS1", y="NMDS2")+
+  theme(plot.title = element_text(hjust=0.5), 
+        panel.background = element_rect(fill="white", colour = "black"))+
+  ggtitle("CSD benthic sediment eDNA, CO1 ASV, all ASV\nenvfit(p < 0.05)")
+pg1
+#ggsave(plot=pg1, 
+#       filename = "BenthicSed_CO1_042924_merger_90_dada2NB_CO1_allASV_NMDS.png", 
+#       path = path, 
+#       height = 6, width = 8)
+```
+
+```{r nmds_plot2, echo=F, eval=T}
+coords2<-as.data.frame(n2$points)
+coords2.2<-coords2
+coords2.2$samp<-rownames(coords2.2)
+coords2.3<-merge(coords2.2, met2, by.x="samp", 
+               by.y = "Sequencing.name", 
+               all.x = T, sort = F) #merge coords with metdata for plotting
+
+col.d<-c( "#a6bddb", "#3690c0", "#02818a", "#014636")
+pg2<-ggplot()+
+    geom_segment(data=env1.arrows2, 
+               aes(xend = NMDS1/1.25, yend = NMDS2/1.25, x=0, y=0), 
+               arrow = arrow(type = "closed", length=unit(0.1,"cm")), 
+               alpha=0.5, color="#333333")+
+  geom_text_repel(data=env1.arrows2, 
+               aes(x = NMDS1/1.25, y = NMDS2/1.25, label=env), 
+               size=4, alpha=0.75, max.overlaps = 20)+
+  geom_point(data=coords2.3, 
+             aes(x=MDS1, y=MDS2, 
+                 col=Depth_bin, shape=StationType), 
+             size=6, alpha=0.75, stroke=1)+
+  scale_shape_manual(values=c(1, 17, 18, 19))+
+  scale_color_manual(values=col.d, name="Depth bin (m)")+
+  labs(x="NMDS1", y="NMDS2")+
+  theme(plot.title = element_text(hjust=0.5), 
+        panel.background = element_rect(fill="white", color="black"),
+        legend.position = "bottom", 
+        legend.key = element_blank(), 
+        legend.direction = "horizontal", 
+        legend.box = "vertical", 
+        legend.text = element_text(size=14), 
+        legend.title = element_text(size=14))+
+  ggtitle("CSD benthic sediment eDNA, CO1 ASV, microbial ASV")
+pg2
+ggsave(plot=pg2, 
+       filename = "BenthicSed_CO1_042924_merger_90_dada2NB_CO1_microbeASV_NMDS_poster.png", 
+       path = path, 
+       height = 8, width = 12)
+```
+
+```{r anosim1, echo=F, eval=T, cache=TRUE}
+#ASV = columns, samples = rows
+met3[is.na(met3)]<-0 #change all NAs to 0
+
+
+#anosim.df1<-data.frame(variable="", 
+#               p.val="", 
+#               r.stat="")
+#for (i in 1:ncol(met3)) {
+#  a<-adonis2(d1, grouping = met3[, i])
+#  name<-colnames(met3)[i]
+#  p.val<-a$signif
+#  r.stat<-a$statistic  
+#  temp<-data.frame(variable=name, 
+#                   p.val=p.val, 
+#                   r.stat=r.stat)
+#  anosim.df1<-rbind(anosim.df1, temp)
+#}
+#df1.p<-subset(anosim.df1, anosim.df1$p.val<0.05)
+#df1.p$r.stat<-as.numeric(df1.p$r.stat)
+#kable(df1.p[-1, ], 
+#      caption = "ANOSIM for all ASV, significant metadata only", 
+#      align = "lcc", digits = 3)
+
+a.combo<-adonis2(d2 ~ met3$BRI + met3$Depth_m + met3$Lon + met3$Lat + 
+                   met3$MediumSand_percent + met3$FineSilt_percent + 
+                   met3$Al_mgkg + met3$As_mgkg + met3$Pb_mgkg + met3$Hg_mgkg + 
+                   met3$sulfides_mgkg + met3$ppDDMU_ngkg + met3$ppDDD_ngkg + 
+                   met3$ppDDE_ngkg + met3$PCB118_ngkg + met3$PCB170_ngkg + 
+                   met3$X26dimethylnaphthalene_ugkg + met3$benzoGHIperylene_ugkg + 
+                   met3$biphenyl_ugkg + met3$pyrene + met3$TotalNitrogen_perwt + 
+                   met3$TotalOrganicCarbon_perwt + met3$TotalSolids_perwt + 
+                   met3$TotalVolatileSolids_perwt + met3$tDDT_ngkg + 
+                   met3$tPCB_ngkg + met3$tPAH_ugkg, 
+                 permutations = 999, distance="bray", na.rm=T)
+a.combo.p<-data.frame(metadata=rownames(a.combo[1]), 
+                      p=a.combo$`Pr(>F)`, 
+                      r=a.combo$R2)
+a.combo.p<-subset(a.combo.p, a.combo.p$p<0.05)
+a.combo.p$metadata<-gsub("met3\\$", "", a.combo.p$metadata)
+a.combo.p$r<-round(a.combo.p$r, 4)
+
+
+permanova.df2<-data.frame(variable="", 
+               p.val="", 
+               r.stat="")
+for (i in 1:ncol(met3)) {
+  a<-adonis2(d2, formula = d2 ~ met3[, i])
+  name<-colnames(met3)[i]
+  p.val<-a$`Pr(>F)`[1]
+  r.stat<-a$R2[1]
+  temp<-data.frame(variable=name, 
+                   p.val=p.val, 
+                   r.stat=r.stat)
+  permanova.df2<-rbind(permanova.df2, temp)
+}
+permanova.df2.p<-subset(permanova.df2, permanova.df2$p.val<0.05)
+permanova.df2.p$r.stat<-as.numeric(permanova.df2.p$r.stat)
+
+kable(permanova.df2.p[-1, ], 
+      caption = "PERMANOVA for microbial ASV only, significant metadata only", 
+      align = "lcc", digits = 3)
+```
+
+sites=rows, taxonomy=columns, all cells = numeric
+```{r isa1, eval=T, echo=T}
+tab.Micr.consol<-ddply(tab.Micr.1, "General.description", numcolwise(sum))
+#tab.Micr.consol$taxon.6[is.na(tab.Micr.consol$taxon.6)]<-"Unassigned"
+
+rownames(tab.Micr.consol)<-tab.Micr.consol[, 1]
+tab.Micr.consol<-tab.Micr.consol[, -1]
+met2<-met2[!grepl("EB", met2$Sequencing.name), ]
+tab.Micr.consol<-tab.Micr.consol[, colnames(tab.Micr.consol) %in% met2$Sequencing.name]
+tab.Micr.consol<-as.data.frame(t(tab.Micr.consol))
+
+groups<-data.frame(depth_bin=met2$Depth_bin)
+rownames(groups)<-rownames(met2)
+
+isa<-multipatt(x = tab.Micr.consol, cluster = groups$depth_bin)
+isa$sign[isa$sign$p.value<0.05, ]
+summary(isa)
+
+```
+

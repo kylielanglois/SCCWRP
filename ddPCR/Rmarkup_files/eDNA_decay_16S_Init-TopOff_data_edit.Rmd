@@ -1,0 +1,722 @@
+---
+title: "eDNA_decay_16S_Init-TopOff_data_edit"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: false
+---
+
+```{r setup} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+##### sequencing data (CD Genomics, initial + TopOff, sequences summed) from May 2024 eDNA decay mesocosm
+
+### set up
+install packages
+
+```{r install, echo = T, warning=F}
+library(knitr)
+#install.packages("PKI")
+#install.packages("rsconnect", type = "source")
+library(rsconnect)
+library(reshape2)
+library(ggplot2)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(palettetown)
+library(heatmap3)
+library(ggbeeswarm)
+library(randomForest)
+library(readxl)
+set.seed(100)
+```
+
+### files
+upload files
+
+```{r file, echo = T}
+path<-"/Users/kylielanglois/SCCWRP/Oceankind - eDNA Work/eDNA Decay Studies/eDNA Degradation Microcosms/final data 041125"
+path.local<-"/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay"
+
+dat<-read.csv(
+  file.path(
+    path, 
+    "16S OTU Table/otu.intial.plus.topoff.final.answer.csv")) 
+#".relabd" for relative abundance table
+
+tax.col<-c("Kingdom", "Phylum", "Class", "Order", "Family", 
+              "Genus", "Species", "Consensus.Lineage")
+tax<-dat[ , match(c("OTUID", tax.col), colnames(dat))]
+
+dat1<-dat[ , -match(tax.col, colnames(dat))]
+dat1<-dat1[, -1] #ger rid of "rownames"
+
+met<-read.csv("/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay/BIO_eDNA_decay_16S_102924/eDNA_decay_metadata.csv")
+met1<-met[!grepl("TO", met$Sequencing.Name), ]
+
+cop<-read_excel(
+  file.path(
+    path, 
+    "ddPCR/eDNA decay may 2024 combo_dilutiondecision_FINAL.xlsx"), sheet = 7)
+
+div.decay<-read.csv(
+  file.path(path.local, "BIO_eDNA_decay_16S_Init_TopOff_final_shan-low.csv"))
+
+
+```
+
+remove samples 
+
+```{r remove_samp, echo = T}
+
+remove<-c("X57", "X83", "X243")
+remove.g<-paste0(remove, collapse = "|")
+
+dat<-dat[, !grepl(remove.g, colnames(dat))]
+dat1<-dat1[, !grepl(remove.g, colnames(dat1))]
+met<-met[!grepl(remove.g, met$Sequencing.Name), ]
+met1<-met1[!grepl(remove.g, met1$Sequencing.Name), ]
+
+```
+
+```{r file_options, echo = F, cache=T, eval=T}
+#edit metadata for plotting
+met1$Temperature.char<-
+  ifelse(met1$Temperature..C.=="25", "5. 25", 
+         ifelse(met1$Temperature..C.=="20", "4. 20",
+                ifelse(met1$Temperature..C.=="15", "3. 15", 
+                       ifelse(met1$Temperature..C.=="10", "2. 10",
+                              ifelse(met1$Temperature..C.=="5", "1. 5",
+                                     met1$Temperature..C.)))))
+
+met1$Treatment.char<-ifelse(met1$Treatment=="DNA", "1. DNA", 
+                            ifelse(met1$Treatment=="CELL", "2. CELL", 
+                                   ifelse(met1$Treatment=="FISH", "3. FISH", 
+                                          met1$Treatment)))
+met1$combo.name<-paste0(met1$Treatment, " ", met1$Temperature..C., "C T",
+                        met1$Time.point, " ", met1$TopOff)
+met1$combo.name<-gsub(" NA", "", met1$combo.name)
+met1$combo.name<-gsub("SPIKEC", "SPIKE", met1$combo.name)
+met1$combo.name<-gsub("INITIALC", "INITIAL", met1$combo.name)
+met1$combo.name<-gsub("MOCKC", "MOCK", met1$combo.name)
+met1$Temperature..C.<-as.numeric(as.character(met1$Temperature..C.))
+
+cop1<-cop[, c(1, 5, 6)]
+colnames(cop1)[1]<-"Sample.Name"
+cop1<-merge(cop1, met1, by="Sample.Name", all.x = T)
+
+```
+
+### taxonomy set-up
+consolidate samples at genus level
+```{r consolidate_gen, echo=T, cache=T, eval=T}
+dat.g<-ddply(dat, "Genus", numcolwise(sum))
+
+#make proportional from ALL ASV 
+colnames(dat.g)[1]<-"Genus"
+
+df.temp<-dat.g
+df.new<-data.frame(Genus=df.temp$Genus)
+
+for (i in 2:ncol(df.temp)) {
+a<-as.data.frame(df.temp[, c(1, i)])
+a[, 2]<-as.numeric(as.character(a[, 2]))
+a<-as.data.frame(a[order(-a[2]), ])
+a<-a[1:20, ]
+df.new<-merge(df.new, a, by="Genus", all=T)
+}
+
+#remove genera with ONLY na
+df.new$sum<-rowSums(!is.na(select(df.new, -Genus))) #count samples with values
+#only in >10% samples
+df.new<-subset(df.new, df.new$sum>46) 
+df.new<-df.new[, !grepl("sum", colnames(df.new))]
+df.new$Genus<-sub("^$", "Unassigned", df.new$Genus)
+
+dat1.g.count<-df.new
+dat1.g<-cbind(dat1.g.count$Genus, 
+                  sweep(dat1.g.count[,2:ncol(dat1.g.count)], 2,
+                        colSums(dat.g[,2:ncol(dat.g)]), `/`)*100) 
+colnames(dat1.g)[1]<-"Genus"
+
+#genera with relative abundance >10% -- from SMT
+dat1.g.alt<-cbind(dat.g$Genus, 
+                  sweep(dat.g[,3:ncol(dat.g)], 2,
+                        colSums(dat.g[,3:ncol(dat.g)]), `/`)*100) 
+dat1.g.alt<-melt(dat1.g.alt)
+dat1.g.alt$Genus2<-ifelse(dat1.g.alt$value > 1, dat1.g.alt$`dat.g$Genus`,"Unassigned")
+dat1.g.alt<-dat1.g.alt[!grepl("Unass|uncul|Chlor", dat1.g.alt$Genus2), ]
+
+```
+
+consolidate blanks at genus level
+```{r consolidate_blank, echo=T, cache=T, eval=T}
+samp.bl<-met$Sequencing.Name[met$Time.point==-1]
+samp.bl<-paste0(samp.bl, "$")
+samp.bl<-paste0(samp.bl, collapse = "|")
+df2.temp<-dat[ , grepl(samp.bl, colnames(dat))]
+df2.temp<-sweep(df2.temp, 2,colSums(df2.temp), `/`)*100
+df2.temp$Genus<-dat$Genus
+df2.temp<-ddply(df2.temp, "Genus", numcolwise(sum))
+
+df2.new<-data.frame(Genus=df2.temp$Genus)
+
+for (i in 2:ncol(df2.temp)) {
+a<-as.data.frame(df2.temp[, c(1, i)])
+a[, 2]<-as.numeric(as.character(a[, 2]))
+a<-as.data.frame(a[order(-a[2]), ])
+a<-a[1:20, ]
+df2.new<-merge(df2.new, a, by="Genus", all=T)
+}
+
+#remove genera with ONLY na
+df2.new$sum<-rowSums(!is.na(select(df2.new, -Genus))) #count samples with values
+df2.new<-subset(df2.new, df2.new$sum>1) #only in >1 samples
+df2.new<-df2.new[, !grepl("sum", colnames(df2.new))]
+df2.new$Genus<-sub("^$", "Unassigned", df2.new$Genus)
+
+dat3.m<-melt(df2.new)
+dat3.m.met<-merge(dat3.m, met1, 
+                  by.x = "variable", by.y="Sequencing.Name", 
+                  all.x=T, sort=F) #merge with metadata
+```
+
+
+### diversity
+taxa = columns, samples = rows
+
+alpha diversity
+```{r div_1, echo=T, cache=T, eval=T}
+#dat.g = all genera, no relative abundance
+a.dat.choose.div<-dat.g
+rownames(a.dat.choose.div)<-a.dat.choose.div$Genus
+a.dat.choose.div<-a.dat.choose.div[, -1]
+
+d.sp<-data.frame(sample=colnames(a.dat.choose.div), #samples
+                 gen.num=colSums(a.dat.choose.div != 0)) #number of genera
+t<-as.data.frame(t(a.dat.choose.div))
+d.sp$gen.even<-(diversity(t, "shannon")/log(specnumber(t))) #Pielous evenness
+d.sp$gen.shan<-diversity(t, "shannon")
+d.sp.met<-merge(d.sp, met1, by.x="sample", by.y="Sequencing.Name") 
+#combine with metadata
+
+#get timepoint of lowest shannon diversity for each
+d.sp.met.s<-d.sp.met %>%
+  group_by(Treatment, Temperature.char) %>%
+  summarise(shan.min=min(gen.shan))
+d.sp.met.s<-merge(d.sp.met.s, 
+                  d.sp.met[, grepl("gen.shan|Time.point", colnames(d.sp.met))], 
+                  by.x="shan.min", by.y="gen.shan", all.x = T)
+#write.csv(d.sp.met.s, row.names = F, 
+#          file.path(path.local, "BIO_eDNA_decay_16S_Init_TopOff_final_shan-low.csv"))
+
+#plot
+d.sp.m<-melt(d.sp)
+d.sp.m.met<-merge(d.sp.m, met1, by.x="sample", by.y="Sequencing.Name")
+d.sp.m.met<-d.sp.m.met[!is.na(d.sp.m.met$Temperature..C.), ]
+
+eg<-ggplot(d.sp.m.met)+
+  geom_point(aes(x=Time.point, y=value, 
+                 color=Temperature.char, shape=variable), 
+             alpha=0.75, size=3)+
+  facet_grid(Temperature..C.*variable~Treatment.char, 
+             scales = "free", space="free_x")+
+  scale_color_manual(
+     values=c("#7b3294","#2c7bb6","#008837", "#fdae61" ,"#d7191c"))+
+  scale_shape_manual(values=c(3, 4, 16), 
+                     label=c("evenness", "richness", "shannon"), 
+                     name="diversity metrics")+
+  theme(legend.position = "bottom", 
+        strip.text.y = element_blank())+
+  ggtitle("eDNA decay May 2024 16S, ALL")
+eg
+
+#ggsave(plot=eg, 
+#        path=path.local,
+#        filename="eDNA_decay_InitTopOff_16S_div_ALL.png",
+#        height=14, width=10)
+```
+
+peak decay vs lowest diversity
+```{r div_2, echo=F, eval=T}
+div.decay.m<-melt(div.decay, id.vars = c("Temperature.char", "Treatment"), 
+                  measure.vars = c("shan.time", "peak.decay.time"))
+facet.labs<-c(shan.time="timepoint: lowest shannon", 
+              peak.decay.time="timepoint: highest decay")
+
+ddg<-ggplot(div.decay.m, 
+            aes(x=Temperature.char, y=value))+
+  geom_path(aes(group=Treatment, color=Treatment), 
+              alpha=0.75)+
+  geom_point(aes(color=Treatment, shape=Treatment), 
+             alpha=0.75, size=3)+
+  scale_shape_manual(values=c(18, 16, 15))+
+  facet_grid(variable~., 
+             labeller = labeller(variable=facet.labs))+
+  labs(x="Temperature", y="Timepoint")
+ddg
+
+#ggsave(plot = ddg, 
+#       filename = "BIO_eDNA_decay_16S_Init_TopOff_final_shan-div.png",
+#       path = path.local, 
+#       height = 4, width = 8)
+
+```
+
+beta diversity 
+```{r div_edit, echo=T, cache=T, eval=T}
+dat.choose<-dat1.g
+#choose which table for plotting
+#dat1 = ASV, no averaging
+#dat1.g = top genera, relative abundance
+#dat1.g.count = top genera, no relative abundance
+#dat.g = all genera, no relative abundance
+
+dat1.m<-melt(dat.choose)
+dat1.m.met<-merge(dat1.m, met1, by.x = "variable", by.y="Sequencing.Name", 
+                 all.x=T, sort=F) #merge with metadata
+
+```
+
+distance matrix 
+```{r beta_diversity, echo=T, eval=F}
+v<-as.data.frame(as.matrix(vegdist(dat1.t, upper = T)))
+v$variable2<-rownames(v)
+v.m<-melt(v, id.vars = "variable2")
+v.m<-merge(v.m, met1, by.x="variable", by.y="Sequencing.Name", all.x = T)
+v.m<-merge(v.m, met1, by.x="variable2", by.y="Sequencing.Name", all.x = T)
+v.m$value<-ifelse(v.m$variable==v.m$variable2, NA, v.m$value)
+
+v.m1<-v.m[!grepl("DI", v.m$variable), ]
+v.m1<-v.m1[!grepl("DI", v.m1$variable2), ]
+vg<-ggplot(data=v.m1[!grepl("-1", v.m1$Time.point.x), ], 
+               aes(x=Time.point.x, y=value, 
+                   col=Time.point.y))+
+  geom_boxplot()+
+  labs(x="Timepoint", y="Bray-Curtis distance", color="Timepoint", 
+       title = "eDNA decay May 2024 Init+TopOff 16S\nBLANKS")
+vg
+#ggsave(plot=vg, 
+#        path=path.local,
+#        filename="eDNA_decay_InitTopOff_16S_boxplot_BLANK.png",
+#        height=6, width=8)
+```
+
+NMDS prep
+```{r div_edit_1, echo=T, eval=T}
+#col.choose<-met1$Sequencing.Name[grepl("BLANK|WATER", met1$Treatment)]
+#dat.choose.1<-dat1[ , match(c("OTUID", col.choose), colnames(dat1))]
+#DO ABOVE JUST FOR BLANKS
+
+#choose which table for plotting
+#dat1 = ASV, no averaging
+#dat1.g = top genera, relative abundance
+dat.choose.1<-dat1[, !grepl("Zymo", colnames(dat1), ignore.case = T)]
+
+dat1.t<-dat.choose.1 #transpose non-relative abundance table
+rownames(dat1.t)<-dat1.t$OTUID
+dat1.t<-dat1.t[, -1]
+dat1.t<-as.data.frame(t(dat1.t))
+n<-metaMDS(dat1.t, trymax = 100)
+```
+
+NMDS
+```{r beta_diversity_plot, echo=F, eval=T}
+coords<-as.data.frame(n$points) #get coordinates
+coords$sample<-rownames(coords)
+coords.m<-merge(coords, met1, by.x="sample", by.y="Sequencing.Name", 
+                all.x=T, sort=F) #add metadata
+
+ng<-ggplot(coords.m)+
+  geom_point(aes(x=MDS1, y=MDS2, 
+                 col=Temperature.char, shape=Treatment.char), 
+             size=4, alpha=0.75)+
+  scale_color_manual(values=c("#7b3294","#2c7bb6","#008837", "#fdae61" ,"#d7191c", 
+                              "black", "grey", "pink"))+
+  scale_shape_manual(values=c(18, 1, 15, 2, 13, 8, 5))+
+  ggtitle("eDNA decay May 2024 Init+TopOff 16S\nALL")
+ng
+
+#ggsave(plot=ng, 
+#        path=path.local,
+#        filename="eDNA_decay_InitTopOff_16S_NMDS.png",
+#        height=6, width=8)
+```
+
+
+### taxonomy plotting
+
+combine replicates (average)
+```{r rep_combo, echo=T, eval=T}
+## SKIP FOR BLANKS (no reps) ##
+toptax<-dat1.g$Genus
+#genus = columns, samples = rows; NOT merged with metadata; NOT relative
+#consolidate triplicates with tax
+
+dat.s<-dat.g[, -2]
+#dat.g = all genera, no relative abundance
+
+rownames(dat.s)<-dat.s[, 1]     #make first column into row names
+dat.s<-dat.s[,-1]               #remove first column
+dat.s<-as.data.frame(t(dat.s))  #samples must be rows!!!!
+dat.s$sample<-rownames(dat.s) #get sample names
+dat.s<-merge(met1[, 
+               match(c("Sequencing.Name", "combo.name", "Replicate"), 
+                     colnames(met1))],
+          dat.s, 
+          by.y = "sample", by.x = "Sequencing.Name", all.y = T)
+
+#get average of triplicates
+dat.s<-ddply(dat.s, "combo.name", numcolwise(mean), na.rm=T) 
+#make proportional for each station
+dat.s.p<-cbind(dat.s$combo.name,                   #by combo name
+          sweep(dat.s[,4:ncol(dat.s)], 1,          
+                rowSums(dat.s[4:ncol(dat.s)]), `/`)*100) 
+dat.s.p<-dat.s.p[!is.na(dat.s.p$`dat.s$combo.name`), ]
+#make proportional from ALL ASV -- SKIP IF ALREADY RELATIVE ABUNDANCE
+#                               -- SKIP IF AVERAGE SAMPLES
+av.sums.2<-rowSums(dat.s.p[2:ncol(dat.s.p)])      #double check all 100s
+                                            #or near 100 if top tax
+rownames(dat.s.p)<-dat.s.p[, 1]    #put back into samples = cols, tax = rows
+dat.s.p<-dat.s.p[, -1]
+dat.s.p<-as.data.frame(t(dat.s.p))
+dat.s.p$Genus<-rownames(dat.s.p)    #make tax column
+dat.s.p<-dat.s.p[, c(ncol(dat.s.p), 1:(ncol(dat.s.p)-1))]
+
+dat.s.p.top<-dat.s.p[match(toptax, dat.s.p$Genus), ] #match to top tax
+dat.s.p.top<-dat.s.p.top[!is.na(dat.s.p.top$Genus), ]
+
+dat.s.p.top.m<-melt(dat.s.p.top)
+dat.s.p.top.m$num<-1:nrow(dat.s.p.top.m)
+dat.s.p.top.met<-merge(dat.s.p.top.m, met1, by.x = "variable", by.y="combo.name", 
+                 all.x=T, sort=F) #merge with metadata
+dat.s.p.top.met<-dat.s.p.top.met[!duplicated(dat.s.p.top.met$num), ]
+```
+
+plot top taxonomy, averaged samples
+```{r taxonomy_plot, echo=F, eval=T}
+dat1.plot<-dat.s.p.top.met
+#dat.s.p.top.met = samples averaged, top taxa for all
+#dat1.m.met = not averaged, top taxa for al (for blanks only)
+#dat2.m.met = not averaged, top tax per sample
+#dat3.m.met = not averaged, top tax per sample, blanks only
+
+# -- SKIP BELOW FOR AVERAGED SAMPLES -- #
+dat1.plot$plot.name<-paste0(dat1.plot$Treatment, " ",
+                             dat1.plot$Temperature..C., "C T",
+                             dat1.plot$Time.point, " ",
+                             dat1.plot$Sample.Name, " ")
+dat1.plot$plot.name.1<-paste0(dat1.plot$Temperature..C., "C T",
+                             dat1.plot$Time.point)
+dat1.plot$plot.name<-gsub(" NA", "", dat1.plot$plot.name)
+dat1.plot<-dat1.plot[!grepl("MOCK", dat1.plot$plot.name), ]
+dat1.plot$Time.point<-ifelse(grepl("SPIKE", dat1.plot$plot.name), "-0.1", 
+                              dat1.plot$Time.point)
+# -- SKIP ABOVE FOR AVERAGED SAMPLES -- #
+
+dat1.plot.1<-rbind(dat1.plot[grepl("BLANK|MOCK|WATER", dat1.plot$Treatment), ], 
+                            dat1.plot[grepl("SPIKE", 
+                                            dat1.plot$Temperature.char), ])
+#only controls ^^^
+dat1.plot<-dat1.plot[!grepl("BLANK|MOCK|WATER|SPIKE", dat1.plot$variable), ]
+#no more controls ^^^
+
+col.top<-c("#F0E868", "#D8B828",  "#F8D0D0","#105010", "#A08018", "#781038",
+           "#68C030","#F07070", "#307808", "#685000", "#E85830","#48A010", 
+           "#F8F8A8", "#095c90", "#606060","#F83858", "#C0C0C0","#3080C0", 
+           "#484880","#68B0E0", "#F8A8A8", "#90D0F8", "#F8C050", "#B080D0", 
+           "#F88058","#D0D018", "#405040",
+           "#808098" ,"#68B8B8" ,"#A8E8E8" ,"#A07858", "#F8F8F8","grey",
+           "#C0C0E8", #blanks top only
+           "#F8A050" , "#A8A8D0","#F07838" , #blanks top only
+           "#8858A8",  "#B04030", "#F8D8D8",  "#F0E8A0")
+
+dat1.plot$Treatment.char<-ifelse(dat1.plot$Treatment=="DNA", "1. DNA", 
+                            ifelse(dat1.plot$Treatment=="CELL", "2. CELL", 
+                                   ifelse(dat1.plot$Treatment=="FISH", "3. FISH", 
+                                          dat1.plot$Treatment)))
+tg<-ggplot(dat1.plot)+
+  geom_bar(aes(x=Time.point, y=value, fill=Genus),          #samples
+  #geom_bar(aes(x=plot.name, y=value, fill=Genus),            #blanks
+           stat = "identity", position = position_stack())+
+  scale_fill_manual(values=col.top)+
+  facet_wrap(vars(Treatment, Temperature..C.), nrow = 3)+    #samples
+  #facet_grid(~Time.point,                                   #blanks
+  #           scales = "free_x", space = "free_x")+
+  theme_bw() +
+  theme(legend.position = "bottom", legend.key.size = unit(0.75,"line"))+
+  labs(x="Treatment + Temperature + Timepoint + Sample#",
+       y="% of total reads", 
+       title="eDNA decay May 2024 Init+TopOff 16S\nSAMPLES (averaged)", 
+       fill="")
+      # title="eDNA decay May 2024 Init+TopOff 16S\nBLANKS (not averaged)")
+tg
+
+ggsave(plot=tg, 
+       filename = "eDNA_decay_InitTopOff_16S_toptax_SAMPLE.png",
+       path = path.local, 
+       height = 8, width = 10)
+        
+```
+
+plot top taxonomy, blanks
+```{r taxonomy_plot_start, eval=T, echo=F}
+#dat3.m.met = spike-in, Catalina water
+#dat.s.p.top.met[grepl("BLANK", dat.s.p.top.met$Treatment.char), ] = SW
+
+col.top<-c("#F0E868", "#D8B828",  "#F8D0D0","#105010", "#A08018", "#781038",
+           "#68C030","#F07070", "#307808", "#685000", "#E85830","#48A010", 
+           "#F8F8A8", "#095c90", "#606060","#F83858", "#C0C0C0","#3080C0", 
+           "#484880","#68B0E0", "#F8A8A8", "#90D0F8", "#F8C050", "#B080D0", 
+           "#F88058","#D0D018", "#405040",
+           "#808098" ,"#68B8B8" ,"#A8E8E8" ,"#A07858", "#B04030","grey",
+           "#C0C0E8", #blanks top only
+           "#F8A050" , "#A8A8D0","#F07838" , 
+           "#8858A8",  "#F0E8A0", "black",  "white") #blanks top only
+
+otg<-ggplot(dat.s.p.top.met[grepl("BLANK", dat.s.p.top.met$Treatment.char), ])+
+  geom_bar(aes(x=Sample.Name, y=value, fill=Genus), 
+           stat = "identity", position = position_stack())+
+  scale_fill_manual(values=col.top)+
+  facet_grid(~Time.point, 
+             scales = "free_x", space = "free_x")+       #SW blanks
+  #facet_grid(~Treatment.char, 
+  #           scales = "free", space = "free")+            #spike-in, Cat
+  theme(axis.text.x = element_text(angle=45, hjust=1, size=7), 
+        legend.position = "right", )+
+  guides(fill=guide_legend(ncol=2))+
+  labs(x="Sample#",
+       y="Relative abundance (%)", 
+       title="eDNA decay May 2024 Init+TopOff 16S")
+otg
+
+#ggsave(plot=otg, 
+#       filename = "eDNA_decay_InitTopOff_16S_toptax_SW.png",
+#       path = path.local, 
+#       height = 6, width = 12)
+        
+```
+
+#### compare taxonomies
+
+top ASV come from spike-in material, "mother" water
+```{r plot_asv_start, eval=T, echo=F}
+samp.asv<-dat1[, !grepl(samp.bl, colnames(dat1))]
+samp.asv$seqcount<-
+  rowSums(samp.asv[2:ncol(samp.asv)]>0) #count samples with values
+samp.asv<-
+  subset(samp.asv, samp.asv$seqcount > 
+           (ncol(samp.asv)-2)*0.05) #only in >5% samples
+
+bl.asv<-dat1[, grepl(samp.bl, colnames(dat1))]
+bl.asv$OTUID<-dat1$OTUID
+
+spike.asv<-bl.asv[, !grepl("CAT", colnames(bl.asv))]
+spike.asv$seqcount<-rowSums(spike.asv[1:(ncol(spike.asv)-1)]>0) 
+#count samples with values
+spike.asv<-subset(spike.asv, spike.asv$seqcount > 0) #unique to spike in
+
+mom.asv<-dat1[, grepl("CAT|OTU", colnames(dat1))]
+mom.asv<-subset(mom.asv, mom.asv$XCAT_SW_4_29_24>0) #unique to mother
+
+#--
+samp.asv.1<-samp.asv[!match(mom.asv$OTUID, samp.asv$OTUID), ]
+#remove anything shared with mother unique asv
+paste0("% of unique spike-in ASV in top ASV: ", 
+       round((sum(spike.asv$OTUID %in% samp.asv.1$OTUID))/nrow(mom.asv), 4)*100)
+paste0("% of unique Catalina ASV in top ASV: ", 
+      round((sum(mom.asv$OTUID %in% samp.asv$OTUID))/nrow(mom.asv), 4)*100)
+paste0("% ASV unique Catalina in spike-in: ", 
+       round((sum(mom.asv$OTUID %in% spike.asv$OTUID))/nrow(mom.asv), 4)*100)
+
+```
+
+plot mock community
+```{r plot_mock, eval=T, echo=T}
+mock.asv<-dat1[, grepl("OTU|ymo", colnames(dat1))]
+mock.asv$seqcount<-rowSums(mock.asv[2:ncol(mock.asv)]>0) 
+#count samples with values
+mock.asv<-subset(mock.asv, mock.asv$seqcount > 0) #unique to spike in
+
+mock.gen<-merge(mock.asv, dat[!grepl("X", colnames(dat))], 
+                by="OTUID", all.x = T)
+mock.gen<-ddply(mock.gen, "Genus", numcolwise(sum))
+mock.gen[ , 2:5]<- (sweep(mock.gen[ , 2:5], 2,
+        colSums(mock.gen[ , 2:5]), `/`))*100
+mock.gen$THEOR.COMP<-c(6,0,12,6,12,12,12,12,12,0)
+mock.gen.m<-melt(mock.gen[,!grepl("seqcount", colnames(mock.gen))])
+
+mg<-ggplot(mock.gen.m)+
+  geom_bar(aes(x=variable, y=value, fill=Genus), 
+           stat = "identity", position = position_stack())+
+  scale_fill_manual(values=c("#58BBCC", "#BCBD45", "#D57DBE", "#84584E", 
+                             "#8D69B8", "#C53932", "#519E3E", "#EF8636", 
+                             "#7F7F7F", "white"), name="")+
+  scale_x_discrete(labels=c("R1", "R2", "R3", "theoretical\ncomposition"))+
+  labs(x="", y="Relative abundance (%)", 
+       title="ZymoBIOMICS Microbial Community DNA Standard (D6305)")
+mg
+
+#ggsave(plot = mg, 
+#       path = path.local, 
+#       filename = "zymo_mock_16S.png", 
+#       height = 4, width = 8)
+
+```
+
+### random forest
+from Susie Theroux code "1_prep.R"and "RF.most.abd.genera.R" accessed 8/4/25
+use genus consolidated (anything <10% rel. ab. = "unassigned"), all reps
+
+random forest prep
+```{r RF_prep, eval=T, echo=F}
+#dat1.g.alt
+#merge with metadata
+colnames(dat1.g.alt)<-c("Genus", "Sequencing.Name", "rel.ab", "Genus2")
+dat1.g.alt<-merge(dat1.g.alt, cop1, by="Sequencing.Name", all.x=T, sort=F)
+
+#just treatment samples
+foo<-which(dat1.g.alt$Treatment %in% c("FISH", "CELL", "DNA"))
+dat1.g.alt<-dat1.g.alt[foo,]
+
+#put back in dataframe format
+gen.rf<-as.data.frame(acast(dat1.g.alt, Sequencing.Name~Genus2,
+                            value.var="rel.ab",
+                            fun.aggregate=sum))
+#match metadata to new dataframe
+met1.rf<-cop1[match(rownames(gen.rf), cop1$Sequencing.Name),]
+
+#CHECK IF ALL MATCH
+sum(row.names(gen.rf) == met1.rf$Sequencing.Name)
+```
+
+random forest
+```{r RF, eval=T, echo=T}
+colnames(met1.rf)<-gsub(" ", "\\.", colnames(met1.rf))
+
+# predict ddPCR with just treatment, condition, timepoint --
+pred.env<-met1.rf[ , match(c("Copies.per.250.mL", "Treatment", 
+                             "Temperature..C.", "Time.point"), 
+                           colnames(met1.rf))]
+pred.env<-pred.env[!is.na(pred.env$Copies.per.250.mL), ]
+
+rf1<-randomForest(data = pred.env, 
+                  Copies.per.250.mL~., ntree=999)
+rf1 # 73.71% of variance explained
+
+# predict ddPCR with treatment, condition, timepoint and genera --
+pred.genera<-gen.rf
+pred.genera$Sequencing.Name<-row.names(pred.genera)
+pred.genera<-merge(pred.genera, 
+                   met1.rf[ , match(c("Sequencing.Name", "Copies.per.250.mL", 
+                                      "Treatment", "Temperature..C.",
+                                      "Time.point"),colnames(met1.rf))], 
+                   by="Sequencing.Name", sort=F, all.x=T)
+pred.genera<-pred.genera[,-1]
+pred.genera<-pred.genera[!is.na(pred.genera$Copies.per.250.mL), ]
+colnames(pred.genera)<-gsub("-", "_", colnames(pred.genera))
+colnames(pred.genera)<-gsub("\\(", "_", colnames(pred.genera))
+colnames(pred.genera)<-gsub("\\)", "_", colnames(pred.genera))
+
+#get "winner" for each treatment
+TREAT<-c("FISH", "CELL", "DNA")
+TEMP<-unique(pred.genera$Temperature..C.)
+rf.df <- data.frame(treatment="", 
+                    temp="", 
+                    perc.var.expl="",
+                    top.5.imp="")
+
+for (i in 1:length(TREAT)) {
+  a <- TREAT[i]
+  
+  for (x in 1:length(TEMP)) {
+    pred.genera.2<-pred.genera[pred.genera$Treatment==a, ]
+    a2 <- TEMP[x]
+    pred.genera.2<-pred.genera.2[pred.genera.2$Temperature..C.==a2, ]
+    rf2<-randomForest(data = pred.genera.2, 
+                      Copies.per.250.mL ~ . , ntree=100)
+    b <- round((tail(rf2$rsq, 1)), 4)*100 # % variance explained
+    rf2.gen<-as.data.frame(rf2$importance)
+    rf2.gen$Genus<-row.names(rf2.gen)
+    rf2.gen<-rf2.gen[order(rf2.gen$IncNodePurity), ]
+    c <- paste0(tail(rf2.gen$Genus, 5), collapse=", ")
+    temp.df <- data.frame(treatment=a, 
+                          temp=a2,
+                          perc.var.expl=b,
+                          top.5.imp=c)
+    rf.df <- rbind(rf.df, temp.df)
+  }
+  rf.df <- rbind(rf.df, temp.df)
+  }
+
+rf.df<-rf.df[-1, ]
+rf.df$combo.treat<-paste(rf.df$treatment, rf.df$temp)
+rf.df<-rf.df[!duplicated(rf.df$combo.treat), ]
+rf.df$timepoint<-ifelse(grepl("Time.point", rf.df$top.5.imp), "YES", "no")
+
+write.csv(rf.df, row.names = F, 
+          file.path(path.local, 
+                    "otu.intial.plus.topoff.final.answer.combo_dilutiondecision_FINAL_RFtopgen.csv"))
+
+```
+
+```{r, RF_plot, eval=T, echo=F}
+# barplot of these top genera
+dat1.g.alt.rf<-dat1.g.alt
+
+foo3<-which(dat1.g.alt.rf$Genus %in% row.names(rf2.gen))
+dat1.g.alt.rf<-dat1.g.alt.rf[foo3,]
+
+drop1<-c("d__Bacteria")
+foo4<-which(dat1.g.alt.rf$Genus %in% drop1) #empty
+
+drop2<-c("#N/A", "BLANK")
+foo5<-which(dat1.g.alt.rf$Treatment %in% drop2) #empty
+
+drop3<-c("ambient")
+foo5<-which(dat1.g.alt.rf$Temperature.char %in% drop3) #empty
+
+dat1.g.alt.rf<-dat1.g.alt.rf[!is.na(dat1.g.alt.rf$Temperature..C.), ]
+
+col.top.1<-c("#F8D0D0", "#F0E868", "#8858A8", "#105010","#A08018", 
+           "#781038", "#68C030", "#F07070", "#A8E8E8","#E85830",
+           "#48A010", "#F8F8A8", "#095c90", "#C0C0E8","#F83858", 
+           "#68B8B8", "#F8C050", "#B080D0", "#B04030",
+           "black",  "white") #black, white extra colors
+
+rfg<-ggplot(dat1.g.alt.rf, 
+       aes(x=Time.point, y=rel.ab, fill=Genus)) +
+  geom_bar(stat = "summary") +
+  scale_fill_manual(values=col.top.1, name="")+
+  facet_wrap(vars(Treatment, Temperature..C.), nrow = 3) +
+  ylab("% of total reads") +
+  theme_bw() +
+  theme(legend.position ="bottom")
+rfg
+
+#ggsave(plot = rfg, 
+#       filename = "BIO_eDNA_decay_16S_Init_TopOff_RF_topgen.png", 
+#       path = path.local, 
+#       height = 8, width = 10)
+```
+
+```{r plot_blank, echo=F, eval=F}
+blank<-ggplot(dat1.g.alt.rf, 
+       aes(x=Time.point, y=rel.ab, fill=Genus)) +
+  geom_bar(stat = "summary") +
+  annotate(geom = "rect", 
+           xmin = 0, ymin = 0, xmax = Inf, ymax = Inf, 
+           fill="white")+
+  facet_wrap(vars(Treatment, Temperature..C.), nrow = 3) +
+  ylab("% of total reads") +
+  theme_bw() +
+  theme(legend.position ="bottom")
+blank
+ggsave(plot = blank, 
+       filename = "BIO_eDNA_decay_16S_Init_TopOff_BLANKPLOT.png", 
+       path = path.local, 
+       height = 8, width = 10)
+```

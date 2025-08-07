@@ -1,0 +1,258 @@
+---
+title: "caulerpa_ddPCR_autofill_edit"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r setup, include = T, echo=F}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+#not include "echo" or "eval" --> do individually to chunks
+```
+
+
+```{r install, echo = F, eval=T}
+library(knitr)
+library(readxl)
+#detach(package:plyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+library(stringr)
+set.seed(100)
+```
+
+upload files
+
+```{r file, echo = T}
+path<-"/Users/kylielanglois/OneDrive - SCCWRP/algae/caulerpa/ddPCR_field"
+
+dat<-read.csv(file.path(path, "2025-06-11 Caulerpa.csv"),
+              head=T)
+dat1<-dat
+
+#edit and combine metadata---
+map.in<-read_excel("/Users/kylielanglois/SCCWRP/eDNA Sample Management - eDNA/CAULERPA/eDNAmasterfile_Caulerpa_inventory_extraction.xlsx", 
+                sheet = 2)
+map.ex<-read_excel("/Users/kylielanglois/SCCWRP/eDNA Sample Management - eDNA/CAULERPA/eDNAmasterfile_Caulerpa_inventory_extraction.xlsx", 
+                   sheet = 3)
+map.dd<-read_excel("/Users/kylielanglois/SCCWRP/eDNA Sample Management - eDNA/CAULERPA/eDNAmasterfile_Caulerpa_inventory_extraction.xlsx", 
+                   sheet = 4)
+
+#map.ex<-rbind(map.ex, map.pos)
+map<-merge(map.ex, map.in, by="SCCWRP_ID", all.x = T)
+map<-merge(map.dd, map, by="SCCWRP_ID", all = T)
+
+colnames(map)<-gsub("\r\n", "\\.", colnames(map)) #turn "new line" in excel format to period
+colnames(map)<-gsub(" ", "\\.", colnames(map)) #turn "space to period
+
+##CHANGE DEPENDING ON QX MANAGER VERSION---
+drop.v1<-0.00085
+drop.v2<-0.000795
+drop.size<-ifelse(any(str_detect(names(dat), "Ch6")), drop.v2, drop.v1)
+```
+
+```{r file_edit, echo = F}
+colnames(map)
+dat2<-merge(map, dat, 
+            by.x="061125_tufA", 
+            by.y="Sample.description.1",
+            all.y = T)
+
+#make sure column names are correct---
+dat2$Extraction.vol.ul<-as.numeric(dat2$VolumeElution.ul)
+dat2$Filtration.vol.ml<-as.numeric(dat2$VolumeFilter.ml)
+dat2$Template.uL<-5
+
+dat2$dilution<-dat2$Sample.description.4
+dat2$Collection.date<-as.Date(dat2$`DateCollected.mm/dd/yy`, format="%m/%d/%y")
+dat2$ddPCR.date<-dat2$Sample.description.2
+
+dat2$sample.unique<-paste(dat2$SCCWRP_ID, dat2$Target, dat2$dilution)
+
+dat2$`ExtractionMethod.brand.+.kit`
+mtch<-c("sample.unique", "SCCWRP_ID", 
+        "StationCode", "StationCode_2", "StationCode_alt", "SampleType.x", 
+        "Replicate#", "DateCollected.yymmdd","Filtration.vol.ml" ,
+        "ExtractionDate.yymmdd", "Extraction.vol.ul", 
+        "ExtractionMethod.brand.+.kit",
+        "ddPCR.date","Template.uL" , "dilution", 
+        "MergedWells", "Well", "Target", "Conc.copies.µL.", 
+        "TotalConfMax", "TotalConfMin",
+        "PoissonConfMax", "PoissonConfMin", 
+        "Positives", "Negatives", "Accepted.Droplets", 
+        "TotalConfidenceMin68", "TotalConfidenceMax68", 
+        "PoissonConfidenceMin68", "PoissonConfidenceMax68")
+
+dat3<-dat2[ ,match(mtch, colnames(dat2))]
+dat1.m<-dat3[grepl("M", dat3$Well),] #only deal with merged wells
+```
+
+check positive and negative controls
+
+```{r neg_pos_check, echo = T, eval=T}
+#QC checks-------
+#pull out no template controls
+ntc<-dat1.m[grepl("NTC", dat1.m$sample.unique),
+            match(c("sample.unique", "Target", "ddPCR.date",
+                    "Positives","Negatives", "Accepted.Droplets"), 
+                  colnames(dat1.m))] 
+paste("NTC positive droplets:", paste0(ntc$Positives, collapse = ", ")) 
+#check that positives < 3
+
+#pull out blanks
+EB<-dat1.m[grepl("EB|FB|BB", dat1.m$sample.unique),
+           match(c("sample.unique", "Target", "ddPCR.date", "Well",
+                   "Positives","Negatives", 
+                   "Accepted.Droplets"), colnames(dat1.m))] 
+paste("blanks positive droplets:", paste0(EB$Positives, collapse = ", ")) 
+#check extraction blanks are 0
+
+#pull out positive controls
+POS<-dat1.m[grepl("POS", dat1.m$sample.unique),
+            match(c("sample.unique", "Target", "Well", "ddPCR.date",
+                    "Positives","Negatives", "Accepted.Droplets"), 
+                  colnames(dat1.m))] 
+paste("positive control positive droplets:", 
+      paste0(POS$Positives, collapse = ", ")) 
+```
+
+QC checks 
+
+```{r QC_check, echo = T}
+dat1.m$well.num<-str_count(dat1.m$MergedWells, ',')+1
+#dat1.m$well.num<-ifelse(dat1.m$well.num==1, 2, dat1.m$well.num) 
+# ^^^ ignore if only 1 well per sample ^^^
+dat1.m<-subset(dat1.m, dat1.m$Accepted.Droplets>(dat1.m$well.num*10000)) 
+#should be included in droplet check
+dat1.m$Negatives<-as.numeric(as.character(dat1.m$Negatives))
+dat1.m<-subset(dat1.m, dat1.m$Negatives>5) #more than 5 negative droplets
+
+#pull out samples to redo -------
+dat1.redo<-dat3
+#pull out no template controls
+dat1.redo<-dat1.redo[!grepl("NTC", dat1.redo$sample.unique),] 
+#pull out no template controls
+dat1.redo<-dat1.redo[!grepl("\\<POS\\>", dat1.redo$sample.unique),] 
+#pull out no template controls
+dat1.redo<-dat1.redo[!grepl("EB|BB", dat1.redo$sample.unique),] 
+#pull out no template controls
+dat1.redo<-dat1.redo[!grepl("FB", dat1.redo$sample.unique),] 
+dat1.redo<-dat1.redo[grepl("M", dat1.redo$Well), ]
+
+dat1.redo$well.num<-str_count(dat1.redo$MergedWells, ',')+1
+#dat1.redo$well.num<-ifelse(dat1.redo$well.num==1, 2, dat1.redo$well.num)
+dat1.redo1<-subset(dat1.redo, 
+                   dat1.redo$Accepted.Droplets<(dat1.redo$well.num*10000))
+#dat1.redo1$sample.unique<-paste(dat1.redo1$sample.unique, 
+#                                "FAILED QC DROPLET CHECK")
+dat1.redo$Negatives<-as.numeric(as.character(dat1.redo$Negatives))
+dat1.redo2<-subset(dat1.redo, dat1.redo$Negatives<5) 
+dat1.redo2$sample.unique<-paste(dat1.redo2$sample.unique, 
+                               "FAILED QC NEGATIVE DROPLETS")
+
+#dat1.redo<-rbind(dat1.redo1, dat1.redo2)
+dat1.redo<-dat1.redo2
+dat1.redo<-dat1.redo[!duplicated(dat1.redo$MergedWells), ]
+
+#if want to add re-dos back-----
+dat1.m<-rbind(dat1.m, dat1.redo)
+```
+
+```{r autofill, echo = T}
+#convert to per microliter-------
+dat1.m$Conc.copies.µL.<-as.numeric(as.character(dat1.m$Conc.copies.µL.))
+dat1.m$Copies.ul<-((dat1.m$Conc.copies.µL.*20)/
+                     dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$PoissConfMaxcopiesperµL<-((dat1.m$PoissonConfMax*20)/
+                                   dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$PoissConfMincopiesperµL<-((dat1.m$PoissonConfMin*20)/
+                                   dat1.m$Template.uL)*dat1.m$dilution
+
+#convert to different metrics--------
+dat1.m$LOQ.Conc.<--log(1-(3/dat1.m$Accepted.Droplets))/drop.size
+dat1.m$LOQ.ul<-(dat1.m$LOQ.Conc.*20)/dat1.m$Template.uL
+dat1.m$LOQ.Filter<-dat1.m$LOQ.ul*dat1.m$Extraction.vol.ul 
+#equivalent to LOQ.per.100ml if filter 100 ml
+dat1.m$LOQ.per.100ml<-(dat1.m$LOQ.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$LOQ.per.L<-dat1.m$LOQ.per.100ml*10
+
+#convert to per filter--------
+dat1.m$Copies.Filter<-dat1.m$Copies.ul*dat1.m$Extraction.vol.ul
+dat1.m$PoissConfMaxCopies.Filter<-
+  dat1.m$PoissConfMaxcopiesperµL*dat1.m$Extraction.vol.ul
+dat1.m$PoissConfMinCopies.Filter<-
+  dat1.m$PoissConfMincopiesperµL*dat1.m$Extraction.vol.ul
+
+#convert to per 100mL---------
+dat1.m$Copies.100mL<-(dat1.m$Copies.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$PoissConfMaxCopiesper100mL<-
+  (dat1.m$PoissConfMaxCopies.Filter/dat1.m$Filtration.vol.ml)*100
+dat1.m$PoissConfMinCopiesper100mL<-
+  (dat1.m$PoissConfMinCopies.Filter/dat1.m$Filtration.vol.ml)*100
+
+#correction factor--------
+#MAKE SURE THIS IS CORRECT
+#dat1.m$Corr.Factor<-1.33
+#dat1.m$Copiesper100mlCorr <- dat1.m$Copies.100mL*dat1.m$Corr.Factor
+#dat1.m$PoissConfMaxCopiesper100mlCorr<-dat1.m$PoissConfMaxCopiesper100mL*dat1.m$Corr.Factor
+#dat1.m$PoissConfMinCopiesper100mlCorr<-dat1.m$PoissConfMinCopiesper100mL*dat1.m$Corr.Factor
+#dat1.m$CopiesperLCorr<-dat1.m$Copiesper100mlCorr*10
+#dat1.m$PoissConfMaxCopiesperLCorr<-dat1.m$PoissConfMaxCopiesper100mlCorr*10
+#dat1.m$PoissConfMinCopiesperLCorr<-dat1.m$PoissConfMinCopiesper100mlCorr*10
+
+#flag if under LOQ-----------
+dat1.m$underLOQ<-ifelse(dat1.m$Copies.ul<dat1.m$LOQ.ul, "under LOQ", "")
+
+#confidence68--------
+dat1.m$TotalConfidenceMin68perµL<-
+  ((dat1.m$TotalConfidenceMin68*20)/dat1.m$Template.uL)*dat1.m$dilution
+dat1.m$TotalConfidenceMax68perµL<-
+  ((dat1.m$TotalConfidenceMax68*20)/dat1.m$Template.uL)*dat1.m$dilution
+
+#dat1.m$TotalConfidenceMin68.Filter<-
+#   dat1.m$TotalConfidenceMin68perµL*dat1.m$Extraction.vol.ul
+#dat1.m$TotalConfidenceMax68.Filter<-
+#   dat1.m$TotalConfidenceMax68perµL*dat1.m$Extraction.vol.ul
+#dat1.m$TotalConfidenceMin68.100mL<-
+#   (dat1.m$TotalConfidenceMin68.Filter/dat1.m$Filtration.vol.ml)*100
+#dat1.m$TotalConfidenceMax68.100mL<-
+#   (dat1.m$TotalConfidenceMax68.Filter/dat1.m$Filtration.vol.ml)*100
+#dat1.m$TotalConfidenceMin68.100mLCorr<-
+#   dat1.m$TotalConfidenceMin68.100mL*dat1.m$Corr.Factor
+#dat1.m$TotalConfidenceMax68.100mLCorr<-
+#   dat1.m$TotalConfidenceMax68.100mL*dat1.m$Corr.Factor
+#dat1.m$TotalConfidenceMin68.perLCorr<-
+#   dat1.m$TotalConfidenceMin68.100mLCorr*10
+#dat1.m$TotalConfidenceMax68.perLCorr<-
+#   dat1.m$TotalConfidenceMax68.100mLCorr*10
+
+#dat1.m$PoissonConfidenceMax68perµL<-(
+#   (dat1.m$PoissonConfidenceMax68*20)/dat1.m$Template.uL)*dat1.m$dilution
+#dat1.m$PoissonConfidenceMin68perµL<-
+#   ((dat1.m$PoissonConfidenceMin68*20)/dat1.m$Template.uL)*dat1.m$dilution
+#dat1.m$PoissonConfidenceMax68.Filter<-
+#   dat1.m$PoissonConfidenceMax68perµL*dat1.m$Extraction.vol.ul
+#dat1.m$PoissonConfidenceMin68.Filter<-d
+#   at1.m$PoissonConfidenceMin68perµL*dat1.m$Extraction.vol.ul
+#dat1.m$PoissonConfidenceMax68.100mL<-
+#   (dat1.m$PoissonConfidenceMax68.Filter/dat1.m$Filtration.vol.ml)*100
+#dat1.m$PoissonConfidenceMin68.100mL<-
+#   (dat1.m$PoissonConfidenceMin68.Filter/dat1.m$Filtration.vol.ml)*100
+#dat1.m$PoissonConfidenceMax68.100mLCorr<-
+#   dat1.m$PoissonConfidenceMax68.100mL*dat1.m$Corr.Factor
+#dat1.m$PoissonConfidenceMin68.100mLCorr<-
+#   dat1.m$PoissonConfidenceMin68.100mL*dat1.m$Corr.Factor
+#dat1.m$PoissonConfidenceMax68.perLCorr<-
+#   dat1.m$PoissonConfidenceMax68.100mLCorr*10
+#dat1.m$PoissonConfidenceMin68.perLCorr<-
+#   dat1.m$PoissonConfidenceMin68.100mLCorr*10
+```
+
+```{r export, echo=T, eval=F}
+write.csv(dat1.m, file.path(path,
+                            "2025-06-11 caulerpa_processed.csv"),
+          row.names = F)
+```
+

@@ -1,0 +1,199 @@
+---
+title: "eDNA_decay_May2024_ddPCR_curves"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+##### ddPCR data (SCCWRP) from May 2024 eDNA decay mesocosm
+
+### set up
+install packages
+
+```{r install, echo = T, warning=F}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(segmented)
+library(readxl)
+library(purrr)
+set.seed(100)
+```
+
+upload files
+
+```{r upload, echo=T, eval=T}
+dna <- read_excel("/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay/eDNA decay final curves 072325.xlsx", 
+                  sheet = 1)
+
+time_map <- list(
+  `0` = 0,
+  `1` = 4,
+  `2` = 8,
+  `3` = 12,
+  `4` = 18,
+  `5` = 24,
+  `6` = 48,
+  `7` = 72,
+  `8` = 168
+)
+```
+
+```{r data_edit, echo=T, eval=T}
+dna_clean <- dna |>
+  mutate(
+    #make hours into character
+    hours = purrr::map_dbl(`Time Point`, 
+                           function(x) time_map[[as.character(x)]]),
+    #get copies per 1ml from data
+    DNA_copies = `Copies per 1 mL`,
+    #make treatment into factor
+    Treatment = factor(toupper(Treatment), levels = c("FISH", "CELL", "DNA"))
+  ) |>
+  #put together
+  arrange(Treatment, Temp, hours, DNA_copies) |>
+  dplyr::select(Treatment, Temp, hours, DNA_copies) |>
+  #mean copies per 1ml per temp+treatment+time
+  group_by(Treatment, Temp, hours) |>
+  summarize(
+    DNA_copies = mean(DNA_copies) 
+  )
+
+```
+
+```{r linearmodel, echo=T, eval=T}
+intercepts<- 
+  dna_clean |>
+  group_by(Treatment, Temp) |>
+  summarize(
+    #linear model of log copies per 1ml by hour, grouped by treatment+temp
+    model = list(lm(log(DNA_copies) ~ hours)),
+    #get y intercept
+    intercept = purrr::map_dbl(model, function(x) exp(coef(x)[1])),
+    #get p value
+    intercept_p_val = purrr::map_dbl(model, function(x) coef(summary(x))[1, 4])
+  ) |>
+  ungroup() |>
+  dplyr::select(-model) 
+#|>  readr::write_csv(file = "tables/eDNA_intercepts.csv")
+
+### broken stick ####
+# fixed breakpoint ####
+
+model_data_for_plot1 <- 
+  dna_clean |>
+  group_by(Treatment, Temp) |>
+  #group by treatment+temp
+  summarize(
+    .groups = "keep",
+    model = list(
+      #linear model of average copies per 1ml by hours
+      segmented(
+        lm(log(DNA_copies) ~ hours, 
+           data = pick(DNA_copies, hours)),
+        seg.Z = ~hours,
+        psi = 24,
+        control = seg.control(it.max = 0)
+      )
+    ),
+    #get model summary
+    summary = purrr::map(model, function(x) summary(x)),
+    adj_r_squared = purrr::map_dbl(summary, function(x) x$adj.r.squared),
+    aic = purrr::map_dbl(model, function(x) AIC(x))
+  ) |>
+  mutate(
+    #get breakpoint (24 hours) to split linear model into 2
+    preds = purrr::map(model, function(mod) {
+      predict(mod,
+        interval = "confidence",
+        newdata = data.frame(hours = seq(min(mod$model$hours), 
+                                         max(mod$model$hours), by = 1)) |>
+          mutate(U1.hours = (hours > 24) * (hours-24))
+      ) |>
+        as.data.frame() |>
+        bind_cols(hours = seq(min(mod$model$hours), 
+                              max(mod$model$hours), by = 1))
+    }),
+    slopes = purrr::map(model, function(mod) {
+      #browser()
+      mod$nameUV <- list(U = "U1.hours", Z = "hours")
+      as.data.frame(slope(mod)$hours) |>
+        tibble::rownames_to_column(var = "slope")
+    })
+  ) |>
+  tidyr::unnest(cols = preds) |>
+  tidyr::unnest(cols = slopes) |>
+  #put together
+  dplyr::select(Treatment, Temp, 
+                adj_r_squared, 
+                fit, 
+                lwr, upr, 
+                hours,
+    slope, est = `Est.`, 
+    t = `t value`
+  ) |>
+  tidyr::pivot_wider(names_from = slope,
+                     values_from = c("est", "t"))
+
+#get annotations from model to put on plots
+annotation_data <- 
+  model_data_for_plot1 |>
+  distinct(Treatment, Temp, 
+           k1 = est_slope1, 
+           k2 = est_slope2, 
+           adj_r_squared) |>
+  mutate(
+    metrics = paste0(
+      "k: ", 
+      format(round(-k1, 3), nsmall = 3), ", ", 
+      format(round(-k2, 3), nsmall = 3), "\n",
+      # "k 95% CI: (", -1 * round(signif(k + 1.96 * k_se, 3), 3), ", ",
+      #   -1 * round(signif(k - 1.96 * k_se, 3), 3), ")\n",
+      "break point: 24\n",
+      "R^2: ", format(round(adj_r_squared, 2), nsmall = 2)))
+
+
+```
+
+```{r linearmodel_plot, eval=T, echo=T}
+eDNA_decay_log_scale_24_hr <- 
+  ggplot(data = dna_clean,
+         aes(x = hours, y = DNA_copies, 
+             color = factor(Temp), 
+             shape = Treatment)) +
+  geom_ribbon(data = model_data_for_plot1,
+              aes(y = exp(fit), 
+                  ymin = exp(lwr), ymax = exp(upr)), 
+              alpha = 0.2, color = NA) +
+  geom_line(data = model_data_for_plot1, 
+            aes(y = exp(fit), color = factor(Temp))) +
+  geom_point(alpha = 0.5, size = 3) +
+  geom_text(data = annotation_data,
+            aes(x = 168, y = 1e13, 
+                label = metrics), 
+            size = 11, size.unit = "pt", hjust = 1, vjust = 1) +
+  coord_cartesian(ylim = c(0.01, 1e14), 
+                  xlim = c(-5, 175), expand = FALSE) +
+  facet_grid(rows = vars(Temp), 
+             cols = vars(Treatment), scales = "free") +
+  scale_y_log10(labels = scales::label_log(base = 10)) +
+  scale_color_manual(
+    values = c("#3B9AB2", "#0b8e37" , "#EBCC2A", "#e67300","#F21A00")) +
+  scale_shape_manual(values = c(16, 17, 18)) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        legend.position = "none")
+
+eDNA_decay_log_scale_24_hr
+
+#ggsave(plot = eDNA_decay_log_scale_24_hr,
+#       path="/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay/figs", 
+#       filename = "eDNA_decay_log_scale_24_hr.png", 
+#       width = 7, height = 7)
+```
+
+

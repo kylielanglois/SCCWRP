@@ -1,0 +1,310 @@
+---
+title: "R1_FHAB_anaC_seq_edit"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include = T, echo=F}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+#not include "echo" or "eval" --> do individually to chunks
+```
+
+## Code to be used for R1 & statewide FHAB sequencing data - anaC specific
+
+### set up
+install packages
+
+```{r install, echo = T}
+library(knitr)
+library(seqinr)
+library(reshape2)
+library(ggplot2)
+library(vegan)
+library(stringr)
+library(plyr)
+library(dplyr)
+library(ggtree)
+set.seed(100)
+```
+
+upload files
+
+```{r file_anaC, echo=F, eval=T}
+path<-"/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/"
+d<-read.csv(file.path(path, "R1_anaC_012623_95_table.csv"))
+tax.ana<-read.delim(
+  file.path(path, "R1_anaC_012623_95_NCBI_bl_tax.tsv"))
+tox<-read.csv(file.path(path, "Cyanotoxin_production_summ_AL.csv"))
+met<-read.csv(file.path(path, "R1_statewide_FHAB_metadata_update_tax.csv"))
+
+rep<-read.fasta("/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/R1_anaC_012623_95_rep_set.fasta")
+
+tree<-ape::read.tree("/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/R1_anaC_012623_95_rep_set_update1_aligned_fasttree.nwk")
+
+tree.db<-ape::read.tree("/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/R1_anaC_012623_95_rep_set_update1_NCBIAllUnique_align_mask_tree_export.nwk")
+tax.db<-read.delim("/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/anaC_NCBI_All_Unique_sequence_TaxInfo.txt")
+
+ana.names<-read.delim("/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/R1_anaC_012623_95_NCBI_bl_tax.tsv")
+ana.names1<-ana.names[, match(c("Feature.ID", "Taxon6", "discard_keep"), colnames(ana.names))]
+ana.names1<-ana.names1[!grepl("discard", ana.names1$discard_keep), ]
+```
+
+```{r file_options, echo = T}
+d.asv<-d
+samps.sum<-data.frame(sample=colnames(d[, 2:ncol(d)]), 
+                      sum=colSums(d[, 2:ncol(d)]))
+samps.sum<-merge(samps.sum,
+                 met[, match(c("Sequencing.name.anaC", "Station.Name"), 
+                             colnames(met))], 
+                 by.x="sample", by.y="Sequencing.name.anaC", all.x=T)
+samps.sum.2<-plyr::ddply(samps.sum, "Station.Name", plyr::numcolwise(sum))
+samps.sum.2<-samps.sum.2[!grepl("EB", samps.sum.2$Station.Name), ]
+met1<-met
+met1[is.na(met1)]<-"0"
+
+```
+
+toxin info 
+```{r tox_1, echo=T, eval=T}
+#edit toxin info--------
+tox1<-as.data.frame(apply(tox, 2, function(x) gsub("^$|^ $", NA, x))) 
+#change blanks to NAs
+tox1.m<-melt(tox1, id.vars = "Genus") 
+tox1.m<-tox1.m[!is.na(tox1.m$value), ] #remove NAs 
+
+tox2<- 
+  tox1.m %>% dplyr::group_by(Genus) %>% 
+  dplyr::summarise(toxins = toString(variable)) #combine toxins for each genera
+tox2$ana.micro<-ifelse(grepl("anatoxin", tox2$toxins, ignore.case = T) & 
+                         grepl("microcyst", tox2$toxins, ignore.case = T), "ANA+MCY", 
+                       ifelse(grepl("anatox", tox2$toxins, ignore.case = T), "ANA", 
+                              ifelse(grepl("microcyst", tox2$toxins, ignore.case = T), "MCY", NA)))
+```
+
+add to taxonomy 
+
+```{r tax1, echo=F, eval=T}
+gen<-tax.ana[, match(c("Feature.ID", "Taxon4", "Taxon6"), colnames(tax.ana))] 
+#just genus assignments
+d.asv.gen<-merge( gen, d.asv, by.y="ASV", by.x="Feature.ID", all.y=T, sort=F) 
+
+#consolidate at genus level, all samples
+d.asv.gen$Taxon6<-gsub("Uncultured_.*","Uncultured", d.asv.gen$Taxon6)
+d.asv.gen$Taxon6[nchar(d.asv.gen$Taxon6)==0] <- "noID"
+d.gen.all<-plyr::ddply(d.asv.gen, "Taxon6", plyr::numcolwise(sum)) 
+d.gen.all$Taxon6[is.na(d.gen.all$Taxon6)]<-"no_genus"
+rownames(d.gen.all)<-d.gen.all$Taxon6
+d.gen.all<-d.gen.all[, -1]
+
+d.gen.all.t<-as.data.frame(t(d.gen.all))
+d.gen.all.t$samples<-rownames(d.gen.all.t)
+
+tox4<-merge(tox2, d.asv.gen, by.x="Genus", by.y="Taxon6", all.y=T) 
+```
+
+edit: consolidated at station (summed), then made proportional (%)
+edit: add taxonomy + toxin info to ASV
+taxa = columns, samples = rows
+
+```{r file_options3, echo = T, eval = T}
+a.temp.df<-d.asv
+
+tax.tox.asv<-a.temp.df[, c(1:4, (ncol(a.temp.df)-1), ncol(a.temp.df))] 
+#taxa, toxin info
+d2<-a.temp.df #for anaC only
+
+#consolidate at station level
+rownames(d2)<-d2[, 1]     #make first column into row names
+d2<-d2[,-1]               #remove first column
+d2<-as.data.frame(t(d2))  #samples must be rows!!!!
+d2<-d2[!grepl("EB", rownames(d2)), ] #remove extraction blanks
+d2$sample<-rownames(d2)
+d2<-merge(met1[, 
+               match(c("Sequencing.name.anaC", "Station.Name"), colnames(met1))],
+          d2, 
+          by.y = "sample", by.x = "Sequencing.name.anaC", all.y = T)
+d2<-d2[!is.na(d2$Station.Name), ]
+d2$Station.Name<-as.character(d2$Station.Name)
+d2.1<-d2
+d2.1<-plyr::ddply(d2.1, "Station.Name", plyr::numcolwise(sum))
+d2.1<-d2.1[!grepl("EB|R12", d2.1$Station.Name), ] #remove extraction blanks
+
+#make proportional for each station
+d3<-d2.1
+d3<-d3[order(d3$Station.Name), ]
+samps.sum.2<-samps.sum.2[order(samps.sum.2$Station.Name), ]
+d3<-cbind(d3$Station.Name, 
+          sweep(d3[,2:ncol(d3)], 1,
+                samps.sum.2$sum, `/`)*100) #make proportional from ALL ASV 
+
+#add tax+tox info
+d4<-d3
+rownames(d4)<-d4$`d3$Station.Name`
+d4<-d4[, -1]
+d4<-as.data.frame(t(d4))
+d4$ASV<-rownames(d4)
+d4<-merge(tax.ana, d4, by.y="ASV", by.x="Feature.ID", all.y = T, sort = F)
+
+# d.gen.all <-- consolidated at genus level, all samples, tax as rows
+# d.gen.all.t <-- consolidated at genus level, all samples, samples as rows
+# d4 <-- consolidated at the station level, proportional
+# d2.1 <-- consolidated at the station level, seq #
+```
+
+##### anaC seqs + toxin concentrations
+
+```{r anaC_tox, echo=F, eval=F}
+anac.tox<-merge(d.gen.all.t, met1, by.x="samples", by.y="Sequencing.name.anaC")
+
+################### STOP HERE ################### 
+# ANAC.TOX: ROWS ARE SAMPLES, COLUMNS AS CONSOLIDATED GENERA, FULLY ADDED METADATA
+# PLOT ANATOXIN AND MICROCYSTIN AGAINST ALL GENERA
+# CORRELATION WITH PLOTS
+
+```
+
+```{r toxin_v_toxinProd, cache=T, echo = T, eval=T}
+#plot genera against toxin-------
+d.gen.all.sp.m<-melt(anac.tox[, 1:19])
+d.gen.all.sp.m<-merge(d.gen.all.sp.m, anac.tox[, c(1, 20:ncol(anac.tox))], 
+                      by="samples", all.x=T, sort=F)
+d.gen.all.sp.m$Anatoxin_ELISA<-as.numeric(d.gen.all.sp.m$Anatoxin_ELISA)
+d.gen.all.sp.m$Microcytins_ELISA<-as.numeric(d.gen.all.sp.m$Microcytins_ELISA)
+d.gen.all.sp.m$Saxitoxin_ELISA<-as.numeric(d.gen.all.sp.m$Saxitoxin_ELISA)
+
+scg1<-ggplot(d.gen.all.sp.m)+
+  geom_point(aes(x=Anatoxin_ELISA, y=value))+
+  facet_wrap(~variable, ncol=6)+
+  labs(y="sequence abundance of toxin producer", 
+       title = "R1 rivers collected 2019- anaC")
+
+scg2<-ggplot(d.gen.all.sp.m)+
+  geom_point(aes(x=Microcytins_ELISA, y=value))+
+  facet_wrap(~variable, ncol=6)+
+  labs(y="sequence abundance of toxin producer", 
+       title = "R1 rivers collected 2019- anaC")
+
+scg3<-ggplot(d.gen.all.sp.m)+
+  geom_point(aes(x=Saxitoxin_ELISA, y=value))+
+  facet_wrap(~variable, ncol=6)+
+  labs(y="sequence abundance of toxin producer", 
+       title = "R1 rivers collected 2019- anaC")
+
+scg1
+scg2
+scg3
+
+#ggsave(plot = scg2, 
+#       filename = "R1_anaC_012623_95_gencol_toxinvToxinProd_mcy.png",
+#       path = "/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/",
+#       height = 6, width = 8)
+```
+
+
+
+
+```{r phylo_tree_anaC, echo=F, eval=F}
+tips$old<-gsub("'", "", tips$old)
+tips<-merge(tips, ana.names1, by.x="old", by.y="Feature.ID", all.x = T, sort=F)
+#tips$Taxon6<-ifelse(!grepl("Cyano|Oscill|Phorm", tips$Taxon6), tips$old, tips$Taxon6)
+tips$color<-ifelse(tips$Taxon6=="Cyanobacteria", "green", 
+                   ifelse(tips$Taxon6=="Oscillatoria", "blue",
+                          ifelse(tips$Taxon6=="Phormidium", "orange", "grey")))
+tree$tip.label<-tips$Taxon4
+
+
+t<-ggtree(tree)+
+  theme_tree2()+
+  #geom_text(aes(label=node, color=node), size=2)+
+  geom_tiplab(size=1)
+  #xlim(0.3:2)
+t
+
+ggsave(plot = t, 
+       filename = "R1_anaC_012623_95_rep_set_update1_NCBIAllUnique_align_mask_tree_export.png", 
+       path = "/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/",
+       height = 12, width = 4)
+```
+
+```{r phylo_tree_anaC_dbseqs, echo=F, eval=F}
+dd<-data.frame(tips=tree.db$tip.label)
+dd$order<-1:nrow(dd)
+dd1<-dd #save original tip names
+dd$tips1<-gsub("\'", "", dd$tips)
+dd$group<-ifelse(grepl("ASV", dd$tips), "ASV", "database")
+dd<-merge(dd, d.asv.gen[, 1:3], by.x="tips1", by.y="Feature.ID", all.x=T)
+dd<-merge(dd, tax.db[, match(c("Feature.ID", "Taxon4", "Taxon6"), colnames(tax.db))], 
+          by.x="tips1", by.y="Feature.ID", all.x=T)
+dd$final.tax<-ifelse(is.na(dd$taxon6), dd$Taxon6, dd$taxon6)
+dd$final.tax<-make.unique(dd$final.tax)
+dd<-dd[, !grepl("tips1", colnames(dd))]
+dd<-dd[order(dd$order), ]
+tree.db$tip.label<-dd$final.tax
+colnames(dd)<-gsub("tips", "old", colnames(dd))
+colnames(dd)<-gsub("final.tax", "tips", colnames(dd))
+dd<-dd[, c(8, 1:7)]
+rownames(dd)<-NULL
+
+p<-ggtree(tree.db) 
+p<- p %<+% dd + geom_tippoint(aes(color=group)) +
+  geom_tiplab(geom = "text") +
+  scale_color_manual(values=c("green", "darkblue"))
+p
+
+#ggsave(plot=p, 
+#       filename = "anaC_NCBI_All_Unique_db_repset.png",
+#       path = "/Users/kylielanglois/OneDrive - SCCWRP/algae/FHABs/", 
+#       height = 45, width = 15)
+
+```
+
+```{r anaC_tax1, echo=F, eval=F}
+#do 'file_options' and 'file_options3' chunk with anaC data table 
+#get to 'd.gen.all'
+d.gen.all.st<-merge(met1[, match(c("Sequencing.name.anaC", "Station.Name"), colnames(met1) )],
+                    d.gen.all, by.x="Sequencing.name.anaC", by.y="sample", all.y=T, sort=F)
+d.gen.all.st<-plyr::ddply(d.gen.all.st, "Station.Name", plyr::numcolwise(sum))
+
+d.gen.all.st.p<-cbind(d.gen.all.st$Station.Name, 
+          sweep(d.gen.all.st[,2:ncol(d.gen.all.st)], 1,
+                rowSums(d.gen.all.st[2:ncol(d.gen.all.st)]), `/`)*100) #make proportional from ALL ASV 
+rowSums(d.gen.all.st.p[,2:ncol(d.gen.all.st.p)])
+
+d1.m<-melt(d.gen.all.st.p)
+d1.m$num<-1:nrow(d1.m)
+colnames(d1.m)[1]<-"Station.Name"
+d1.m.m<-merge(d1.m, met1, 
+              by = "Station.Name",
+              all.x = T)
+d1.m.m<-d1.m.m[!duplicated(d1.m.m$num), ]
+d1.m.m<-d1.m.m[!grepl("EB|R12", d1.m.m$Station.Name), ] #remove EBs
+
+ana.col<-c("#C04040","#70A830", "#E87830", "#506028",  "#98D048", "black", "#E8E878", "black",
+           "#786038",  "#D0C860", "#808080", "#808080", "#808080", "#808080",
+           "#B8F870", "#F8C060", "darkblue", "white")
+cg<-ggplot(d1.m.m)+
+  geom_bar(aes(x=Station.Name, y=value, fill=variable), 
+           stat = "identity", position = position_stack())+
+  scale_fill_manual(values=ana.col)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        plot.title = element_text(hjust=0.5), 
+        legend.position = "bottom")+
+  #guides(fill=guide_legend(ncol = 6))+
+  facet_grid(~RiverName2, scales = "free_x", space ="free")+
+  labs(x="Station Code + Collection Month-Day (2019)", 
+       y="proportion of sequences (%) per station", 
+       title = "anaC sequencing data 1/26/23\nNCBI BLAST taxonomy")
+cg
+
+ggsave(plot = cg,
+       filename = "R1_anaC_012623_95_anaC_NCBI_bl_gencol_stationcol_bar_stream.png", 
+       path = path,
+       height = 6, width = 10)
+
+```
+
+
+```{r final, echo=F, eval=T}
+#code is finished :)
+```

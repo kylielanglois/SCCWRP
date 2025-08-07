@@ -1,0 +1,286 @@
+---
+title: "eDNA_decay_16S_March2024"
+author: "K_Langlois"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: false
+---
+
+```{r setup} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+##### sequencing data (Laragen) from March 2024 eDNA decay mesocosm
+
+### set up
+install packages
+
+```{r install, echo = T, warning=F}
+library(knitr)
+#install.packages("PKI")
+#install.packages("rsconnect", type = "source")
+library(rsconnect)
+library(reshape2)
+library(ggplot2)
+library(vegan)
+library(plyr)
+library(dplyr)
+library(palettetown)
+library(heatmap3)
+library(ggbeeswarm)
+set.seed(100)
+```
+
+upload files
+
+```{r file, echo = T}
+path<-"/Users/kylielanglois/OneDrive - SCCWRP/eDNA decay/BIO_eDNA_decay_16S_070124"
+
+met<-read.csv(file.path(
+  path, "eDNA decay March 2024 map.csv"))
+met1<-subset(met, met$Sequencing=="x", )
+met1$Sequencing.Name<-gsub("-", "\\.", met1$Sequencing.Name)
+met1$plot.name<-paste(met1$Water.plot, met1$Time.point)
+met1<-met1[order(met1$Water.plot.order), ]
+met1$Water.plot<-factor(met1$Water.plot, 
+                              levels=unique(met1$Water.plot))
+
+dat<-read.delim(file.path(
+    path, "BIO_eDNA_decay_16S_070124_table.txt")) 
+dat1<-dat[, match(c("ASV", met1$Sequencing.Name), colnames(dat))]
+
+tax<-read.delim(file.path(
+  path, "BIO_eDNA_decay_16S_070124_tax.tsv"))
+
+tax<-tax[match(dat$ASV, tax$ASV), ] #match to data table
+
+dat1.tax<-merge(dat1, tax, by="ASV", all.x = T)
+```
+
+
+```{r consolidate, echo=T, eval=T}
+sampsums<-colSums(dat1.tax[2:13])
+dat1.tax.NP<-dat1.tax$ASV[grepl("Natronomonas", dat1.tax$Taxon6)]
+
+dat1.g<-ddply(dat1.tax, "Taxon6", numcolwise(sum)) #consolidate by genus
+sampsums2<-colSums(dat1.g[2:13])
+
+dat1.g<-dat1.g[, !grepl("Consensus", colnames(dat1.g))] #remove consensus column
+dat1.g$sum<-rowSums(dat1.g[2:ncol(dat1.g)]) #sequence totals per genus
+dat1.g<-dat1.g[order(-dat1.g$sum), ]
+
+sampsums.gen<-colSums(dat1.g[2:13]) #sequence totals per sample
+tot<-sum(sampsums)
+sum(dat1.g$sum[1:21]) / tot #choose at least 75%
+```
+
+```{r consolidate_1, echo=T, eval=T}
+dat1.g.count<-dat1.g
+dat1.g.relab<-cbind(dat1.g$Taxon6, 
+                  sweep(dat1.g[,2:13], 2,
+                        sampsums2, `/`)*100) #make proportional from ALL ASV 
+colnames(dat1.g.relab)[1]<-"Genus"
+sampsums.gen<-colSums(dat1.g.relab[2:13])
+
+dat1.g.top<-dat1.g.relab[1:21, ]
+dat1.g.top<-dat1.g.top[!grepl("Natronomonas", dat1.g.top$Genus), ]
+### CHOOSE IF WANT TO INCLUDE NP OR NOT ###
+toptax<-dat1.g.top$Genus 
+
+```
+
+## diversity
+
+taxa = columns, samples = rows
+
+```{r div_1, echo=T, cache=T, eval=T}
+dat.choose.div<-dat1
+#choose which table for plotting
+#dat1 = ASV
+#dat1.g.top = top genera, relative abundance
+#dat.g = all genera, relative abundance
+#dat1.g.count = all genera, no relative abundance
+
+rownames(dat.choose.div)<-dat1$ASV
+dat.choose.div<-dat.choose.div[, -1]
+dat.choose.div.t<-as.data.frame(t(dat.choose.div))
+
+shan<-data.frame(sample=rownames(dat.choose.div.t), 
+                 shannon=diversity(dat.choose.div.t))
+shan<-merge(shan, met1, by.x="sample", by.y="Sequencing.Name")
+
+sg<-ggplot(shan, 
+           aes(x=hours, y=shannon, color=Water.plot))+
+  geom_point()+
+  geom_path(aes(group=Water.plot))+
+  labs(x="Time (hours)", y="Shannon diversity index", 
+       title = "eDNA decay March 2024 16S")+
+  theme(legend.position = "bottom")
+sg
+
+#ggsave(plot = sg, 
+#       filename = "BIO_eDNA_decay_16S_070124_shannon.png",
+#       path = path, 
+#       height = 5, width = 6)
+```
+
+```{r div_2, echo=T, cache=T, eval=T}
+dat.choose.div.t.2<-
+  dat.choose.div.t[, !grepl(dat1.tax.NP, colnames(dat.choose.div.t))]
+#remove natrosomonas (pos control) from NMDS
+
+n<-metaMDS(dat.choose.div.t, trymax = 100)
+#use ".t" for all seqs, use ".t.2" for no NP
+v<-as.data.frame(as.matrix(vegdist(dat.choose.div.t, upper = T)))
+v$variable2<-rownames(v)
+v.m<-melt(v, id.vars = "variable2")
+v.m<-merge(v.m, met1, by.x="variable", by.y="Sequencing.Name", all.x = T)
+v.m<-merge(v.m, met1, by.x="variable2", by.y="Sequencing.Name", all.x = T)
+v.m$value<-ifelse(v.m$variable==v.m$variable2, NA, v.m$value)
+```
+
+```{r div_plot_1, echo=T, eval=T, cache=T}
+
+coords<-as.data.frame(n$points) #get coordinates
+coords$sample<-rownames(coords)
+coords.m<-merge(coords, met1, by.x="sample", by.y="Sequencing.Name", 
+                all.x=T, sort=F) #add metadata
+
+ng<-ggplot(coords.m)+
+  geom_point(aes(x=MDS1, y=MDS2, col=Water.plot, shape=Time.point), 
+             size=4, alpha=0.75, stroke=0.75)+
+  scale_shape_manual(values=c(18, 8, 5))+
+  ggtitle("eDNA decay March 2024 16S\n NMDS Bray-Curtis")
+ng
+
+#ggsave(plot=ng, 
+#        path=path,
+#        filename="BIO_eDNA_decay_16S_070124_NMDS.png",
+#        height=4, width=6)
+
+hg<-ggplot(v.m, 
+           aes(x=plot.name.x, y=plot.name.y))+
+  geom_tile(aes(fill=value))+
+  geom_text(aes(label=round(value, 2)), size=2)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_fill_gradient2(low = "red", mid = "grey", high = "black", 
+                       midpoint = 0.5, na.value = "white")+
+  labs(x="", y="", 
+       title = "eDNA decay March 2024 16S\n Bray-Curtis")
+hg
+#ggsave(plot=hg, 
+#        path=path,
+#        filename="BIO_eDNA_decay_16S_070124_heat.png",
+#        height=6, width=8)
+
+```
+
+## taxonomy
+
+```{r tax_1, echo=T, cache=T, eval=T}
+dat.choose.tax<-dat1.g.top
+#choose which table for plotting
+#dat1 = ASV
+#dat1.g.top = top genera, relative abundance
+#dat1.g.relab = all genera, relative abundance
+#dat1.g.count = all genera, no relative abundance
+dat.choose.tax$Genus<-sub("^$", "Unassigned", dat.choose.tax$Genus)
+
+dat1.m<-melt(dat.choose.tax)
+dat1.m.met<-merge(dat1.m, met1, 
+                  by.x = "variable", by.y="Sequencing.Name", 
+                  all.x=T, sort=F) #merge with metadata
+
+#get top 20 genera in each sample
+df.temp<-dat1.g.relab
+df.new<-data.frame(Genus=df.temp$Genus)
+
+for (i in 2:13) {
+a<-as.data.frame(df.temp[, c(1, i)])
+a[, 2]<-as.numeric(as.character(a[, 2]))
+a<-as.data.frame(a[order(-a[2]), ])
+a<-a[1:20, ]
+df.new<-merge(df.new, a, by="Genus", all=T)
+}
+
+#remove genera with ONLY na
+df.new[is.na(df.new)]<--1
+df.new$sum<-rowSums(df.new[2:13])
+df.new<-subset(df.new, df.new$sum>0)
+df.new[df.new==-1]<-NA
+df.new<-df.new[, !grepl("sum", colnames(df.new))]
+df.new$Genus<-sub("^$", "Unassigned", df.new$Genus)
+
+dat2.m<-melt(df.new)
+dat2.m.met<-merge(dat2.m, met1, 
+                  by.x = "variable", by.y="Sequencing.Name", 
+                  all.x=T, sort=F) #merge with metadata
+
+### CHOOSE IF WANT TO INCLUDE NP OR NOT ###
+#dat2.m.met<-dat2.m.met[!grepl("Natronomonas", dat2.m.met$Genus), ]
+```
+
+```{r tax_plot_1, echo=T, cache=T, eval=T}
+
+col.top<-c("#F0E868",  "#F8D0D0","#105010", "#A08018", "#781038",
+           "#68C030","#F07070",  "#685000", "#E85830","#48A010", 
+           "#F8F8A8",  "#F88058",  "#606060","#F83858","#3080C0", 
+           "#484880",  "#90D0F8",  "#B080D0", 
+          "#095c90", "#B04030",  "#F8F8A8", "#095c90",
+           "#C0C0C0","black", "#F8A8A8","#3080C0" )
+
+tg<-ggplot(dat1.m.met)+
+  geom_bar(aes(x=Time.point, y=value, fill=Genus), 
+           stat = "identity", position = position_stack())+
+  facet_grid(~(Water.plot), scales = "free_x", space = "free_y")+
+  scale_fill_manual(values=col.top)+
+  labs(x="Time point", y="Relative sequence abundance (%)", 
+       title="eDNA decay March 2024 16S\ntop 20 genera")+
+  guides(fill=guide_legend(ncol=1))
+tg
+
+#ggsave(plot=tg, 
+#        path=path,
+#        filename="BIO_eDNA_decay_16S_070124_toptax_bar.png",
+#        height=8, width=10)
+
+wg<-ggplot(dat2.m.met)+
+  geom_bar(aes(x=Water.plot, y=value, fill=Genus), 
+           stat = "identity", position = position_stack())+
+  facet_grid(~Time.point, scales = "free_x", space = "free_y")+
+  scale_fill_manual(values=col.top)+
+  labs(x="Time point", y="Relative sequence abundance (%)", 
+       title="eDNA decay March 2024 16S\ntop 20 genera")+
+  guides(fill=guide_legend(ncol=1))
+wg
+
+#ggsave(plot=wg, 
+#        path=path,
+#        filename="BIO_eDNA_decay_16S_070124_toptax_bar_1_time_noNP.png",
+#        height=8, width=10)
+
+```
+
+
+```{r tax_plot_2, eval=T, echo=T}
+dat.one<-subset(dat1.m.met, dat1.m.met$Time.point=="1")
+dat.one<-dat.one[grepl("WSW", dat.one$Water.plot), ]
+
+og<-ggplot(dat.one)+
+  geom_bar(aes(x=Time.point, y=value, fill=Genus), 
+           stat = "identity", position = position_stack())+
+  facet_grid(~(Water.plot), scales = "free_x", space = "free_y")+
+  scale_fill_manual(values=col.top)+
+  labs(x="Time point", y="Relative sequence abundance (%)", 
+       title="eDNA decay March 2024 16S\ntop 20 genera")+
+  guides(fill=guide_legend(ncol=1))
+og
+
+#ggsave(plot=og, 
+#        path=path,
+#        filename="BIO_eDNA_decay_16S_070124_toptax_bar_start_noNP.png",
+#        height=8, width=4)
+
+```
+
